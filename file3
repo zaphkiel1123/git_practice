@@ -3,3 +3,7 @@ my original data
 	Hello in local
 // ------  added in local (end) -----
 git pull overwrite !!
+
+// ------  added this section on repo    -------
+  Hello first
+// ------  added this section on repo (end)   -------
