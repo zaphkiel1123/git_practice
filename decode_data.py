@@ -58,14 +58,31 @@ def ticks_to_datetime(ticks):
     return DOTNET_EPOCH + timedelta(microseconds=ticks // 10)
 
 
+def infer_direction(price, level_low, level_high):
+    """Infer trade direction from price position within the level.
+
+    Quote rule: trade at the ask (high) = BUY, trade at the bid (low) = SELL.
+    """
+    if abs(price - level_high) < 1e-9:
+        return 'BUY'
+    elif abs(price - level_low) < 1e-9:
+        return 'SELL'
+    else:
+        return 'UNKNOWN'
+
+
 def decode_record(raw_bytes):
     """Decode a single 57-byte record into a dictionary."""
     fields = RECORD_STRUCT.unpack(raw_bytes)
+    price = fields[1]
+    level_low = fields[2]
+    level_high = fields[3]
     return {
         'timestamp': ticks_to_datetime(fields[0]),
-        'price': fields[1],
-        'level_low': fields[2],
-        'level_high': fields[3],
+        'price': price,
+        'level_low': level_low,
+        'level_high': level_high,
+        'direction': infer_direction(price, level_low, level_high),
         'txn_count': fields[4],
         'txn_count_dup': fields[5],
         'cumulative_txn': fields[6],
@@ -97,7 +114,7 @@ def decode_file(filepath):
 def print_text(filepath, limit=None):
     """Print decoded records in a human-readable text table."""
     header = (f"{'#':>6} | {'Timestamp':<26} | {'Price':>9} | "
-              f"{'Level Low':>9} | {'Level High':>10} | "
+              f"{'Level Low':>9} | {'Level High':>10} | {'Dir':<7} | "
               f"{'Txn Count':>9} | {'Cumulative':>10} | {'Flag':>4}")
     print(header)
     print('-' * len(header))
@@ -108,6 +125,7 @@ def print_text(filepath, limit=None):
         ts_str = rec['timestamp'].strftime('%Y-%m-%d %H:%M:%S.%f')
         print(f"{i:>6} | {ts_str:<26} | {rec['price']:>9.2f} | "
               f"{rec['level_low']:>9.2f} | {rec['level_high']:>10.2f} | "
+              f"{rec['direction']:<7} | "
               f"{rec['txn_count']:>9} | {rec['cumulative_txn']:>10} | "
               f"{rec['flag']:>4}")
 
@@ -118,7 +136,7 @@ def export_csv(filepath, output_path):
         writer = csv.writer(csvfile)
         writer.writerow([
             'record_num', 'timestamp', 'price', 'level_low', 'level_high',
-            'txn_count', 'cumulative_txn', 'flag'
+            'direction', 'txn_count', 'cumulative_txn', 'flag'
         ])
         for i, rec in decode_file(filepath):
             writer.writerow([
@@ -127,6 +145,7 @@ def export_csv(filepath, output_path):
                 f"{rec['price']:.2f}",
                 f"{rec['level_low']:.2f}",
                 f"{rec['level_high']:.2f}",
+                rec['direction'],
                 rec['txn_count'],
                 rec['cumulative_txn'],
                 rec['flag'],
@@ -144,6 +163,8 @@ def print_summary(filepath):
     max_txn = 0
     price_min = float('inf')
     price_max = float('-inf')
+    buy_count = 0
+    sell_count = 0
 
     for i, rec in decode_file(filepath):
         if first_rec is None:
@@ -153,6 +174,10 @@ def print_summary(filepath):
         max_txn = max(max_txn, rec['txn_count'])
         price_min = min(price_min, rec['price'])
         price_max = max(price_max, rec['price'])
+        if rec['direction'] == 'BUY':
+            buy_count += 1
+        elif rec['direction'] == 'SELL':
+            sell_count += 1
 
     print("=" * 60)
     print(f"  File:            {filepath}")
@@ -165,6 +190,8 @@ def print_summary(filepath):
     print(f"  Tick size:       0.25")
     print(f"  Total txns:      {total_txn:,}")
     print(f"  Max txns/event:  {max_txn}")
+    print(f"  BUY events:      {buy_count:,} ({buy_count/num_records*100:.1f}%)")
+    print(f"  SELL events:     {sell_count:,} ({sell_count/num_records*100:.1f}%)")
     print("=" * 60)
 
 
