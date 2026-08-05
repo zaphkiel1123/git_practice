@@ -56,8 +56,17 @@ TICK_SIZE = 0.25
 # Data loading
 # ============================================================
 
-def load_ticks(filepath: str) -> pd.DataFrame:
-    """Decode binary ticks into a sorted DataFrame."""
+def load_ticks(filepath: str) -> pd.DataFrame | None:
+    """Decode binary ticks into a sorted DataFrame. Returns None on failure."""
+    filesize = os.path.getsize(filepath)
+    if filesize == 0:
+        print(f"    SKIP (empty file): {filepath}", file=sys.stderr)
+        return None
+    if filesize % 57 != 0:
+        print(f"    SKIP (size {filesize} not divisible by 57): {filepath}",
+              file=sys.stderr)
+        return None
+
     rows = []
     for _, rec in decode_file(filepath):
         rows.append({
@@ -69,7 +78,8 @@ def load_ticks(filepath: str) -> pd.DataFrame:
             'cumulative_volume_delta': rec['cumulative_volume_delta'],
         })
     if not rows:
-        raise ValueError(f"No records found in {filepath}")
+        print(f"    SKIP (no records decoded): {filepath}", file=sys.stderr)
+        return None
     df = pd.DataFrame(rows)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df = df.sort_values('timestamp').reset_index(drop=True)
@@ -97,11 +107,21 @@ def resolve_inputs(paths: list[str]) -> list[str]:
 
 
 def load_multiple(filepaths: list[str]) -> pd.DataFrame:
-    """Load and concatenate multiple .data files."""
+    """Load and concatenate multiple .data files, skipping bad ones."""
     dfs = []
+    skipped = 0
     for fp in filepaths:
         print(f"  Loading {fp} ...")
-        dfs.append(load_ticks(fp))
+        result = load_ticks(fp)
+        if result is not None:
+            dfs.append(result)
+        else:
+            skipped += 1
+    if not dfs:
+        print("Error: no valid .data files could be decoded.", file=sys.stderr)
+        sys.exit(1)
+    if skipped:
+        print(f"  ({skipped} file(s) skipped due to format/size issues)")
     df = pd.concat(dfs, ignore_index=True).sort_values('timestamp').reset_index(drop=True)
     return df
 
