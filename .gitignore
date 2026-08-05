@@ -1,0 +1,5 @@
+.venv/
+*.parquet
+direction_model.txt
+magnitude_model.txt
+model_results.json
