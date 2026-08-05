@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# python3 decode_data.py 20250904.data --all
+# python3 decode_data.py 20250904.data --csv out.csv
 """
 Decoder for .data binary transaction files (e.g., 20250909.data).
 
@@ -51,6 +53,7 @@ RECORD_FORMAT = '<q3d6IB'  # int64 + 3 doubles + 6 uint32 + 1 byte
 RECORD_STRUCT = struct.Struct(RECORD_FORMAT)
 
 DOTNET_EPOCH = datetime(1, 1, 1)
+SESSION_RESET_HOUR = 18  # cumulative volume delta resets at 18:00
 
 
 def ticks_to_datetime(ticks):
@@ -71,21 +74,44 @@ def infer_direction(price, level_low, level_high):
         return 'UNKNOWN'
 
 
+def volume_delta(direction, txn_count):
+    """Signed volume contribution for one record. UNKNOWN contributes 0."""
+    if direction == 'BUY':
+        return txn_count
+    if direction == 'SELL':
+        return -txn_count
+    return 0
+
+
+def session_date(ts):
+    """Trading session date keyed by the 18:00 reset boundary.
+
+    Records from 18:00 onward belong to that calendar day's session;
+    records before 18:00 belong to the previous calendar day's session.
+    """
+    if ts.hour >= SESSION_RESET_HOUR:
+        return ts.date()
+    return (ts - timedelta(days=1)).date()
+
+
 def decode_record(raw_bytes):
     """Decode a single 57-byte record into a dictionary."""
     fields = RECORD_STRUCT.unpack(raw_bytes)
     price = fields[1]
     level_low = fields[2]
     level_high = fields[3]
+    direction = infer_direction(price, level_low, level_high)
+    txn_count = fields[4]
     return {
         'timestamp': ticks_to_datetime(fields[0]),
         'price': price,
         'level_low': level_low,
         'level_high': level_high,
-        'direction': infer_direction(price, level_low, level_high),
-        'txn_count': fields[4],
+        'direction': direction,
+        'txn_count': txn_count,
         'txn_count_dup': fields[5],
         'cumulative_txn': fields[6],
+        'volume_delta': volume_delta(direction, txn_count),
         'reserved_1': fields[7],
         'reserved_2': fields[8],
         'reserved_3': fields[9],
@@ -94,7 +120,11 @@ def decode_record(raw_bytes):
 
 
 def decode_file(filepath):
-    """Generator that yields decoded records from a binary .data file."""
+    """Generator that yields decoded records from a binary .data file.
+
+    Adds cumulative_volume_delta, which resets to 0 at each 18:00 session
+    boundary, then includes the current record's volume_delta.
+    """
     filesize = os.path.getsize(filepath)
     if filesize % RECORD_SIZE != 0:
         print(f"WARNING: File size ({filesize}) is not evenly divisible by "
@@ -102,20 +132,30 @@ def decode_file(filepath):
               file=sys.stderr)
 
     num_records = filesize // RECORD_SIZE
+    cum_vd = 0
+    prev_session = None
 
     with open(filepath, 'rb') as f:
         for i in range(num_records):
             raw = f.read(RECORD_SIZE)
             if len(raw) < RECORD_SIZE:
                 break
-            yield i, decode_record(raw)
+            rec = decode_record(raw)
+            sess = session_date(rec['timestamp'])
+            if prev_session is None or sess != prev_session:
+                cum_vd = 0
+                prev_session = sess
+            cum_vd += rec['volume_delta']
+            rec['cumulative_volume_delta'] = cum_vd
+            yield i, rec
 
 
 def print_text(filepath, limit=None):
     """Print decoded records in a human-readable text table."""
     header = (f"{'#':>6} | {'Timestamp':<26} | {'Price':>9} | "
               f"{'Level Low':>9} | {'Level High':>10} | {'Dir':<7} | "
-              f"{'Txn Count':>9} | {'Cumulative':>10} | {'Flag':>4}")
+              f"{'Txn Count':>9} | {'Vol Δ':>7} | {'Cum Vol Δ':>9} | "
+              f"{'Cumulative':>10} | {'Flag':>4}")
     print(header)
     print('-' * len(header))
 
@@ -126,8 +166,9 @@ def print_text(filepath, limit=None):
         print(f"{i:>6} | {ts_str:<26} | {rec['price']:>9.2f} | "
               f"{rec['level_low']:>9.2f} | {rec['level_high']:>10.2f} | "
               f"{rec['direction']:<7} | "
-              f"{rec['txn_count']:>9} | {rec['cumulative_txn']:>10} | "
-              f"{rec['flag']:>4}")
+              f"{rec['txn_count']:>9} | {rec['volume_delta']:>7} | "
+              f"{rec['cumulative_volume_delta']:>9} | "
+              f"{rec['cumulative_txn']:>10} | {rec['flag']:>4}")
 
 
 def export_csv(filepath, output_path):
@@ -136,7 +177,8 @@ def export_csv(filepath, output_path):
         writer = csv.writer(csvfile)
         writer.writerow([
             'record_num', 'timestamp', 'price', 'level_low', 'level_high',
-            'direction', 'txn_count', 'cumulative_txn', 'flag'
+            'direction', 'txn_count', 'volume_delta', 'cumulative_volume_delta',
+            'cumulative_txn', 'flag'
         ])
         for i, rec in decode_file(filepath):
             writer.writerow([
@@ -147,6 +189,8 @@ def export_csv(filepath, output_path):
                 f"{rec['level_high']:.2f}",
                 rec['direction'],
                 rec['txn_count'],
+                rec['volume_delta'],
+                rec['cumulative_volume_delta'],
                 rec['cumulative_txn'],
                 rec['flag'],
             ])
@@ -165,6 +209,7 @@ def print_summary(filepath):
     price_max = float('-inf')
     buy_count = 0
     sell_count = 0
+    final_cum_vd = 0
 
     for i, rec in decode_file(filepath):
         if first_rec is None:
@@ -174,6 +219,7 @@ def print_summary(filepath):
         max_txn = max(max_txn, rec['txn_count'])
         price_min = min(price_min, rec['price'])
         price_max = max(price_max, rec['price'])
+        final_cum_vd = rec['cumulative_volume_delta']
         if rec['direction'] == 'BUY':
             buy_count += 1
         elif rec['direction'] == 'SELL':
@@ -192,6 +238,7 @@ def print_summary(filepath):
     print(f"  Max txns/event:  {max_txn}")
     print(f"  BUY events:      {buy_count:,} ({buy_count/num_records*100:.1f}%)")
     print(f"  SELL events:     {sell_count:,} ({sell_count/num_records*100:.1f}%)")
+    print(f"  Final cum vol Δ: {final_cum_vd:,} (resets daily at 18:00)")
     print("=" * 60)
 
 
