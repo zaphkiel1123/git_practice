@@ -21,16 +21,18 @@ Outputs probability of 50-tick continuation stratified by:
 
 Usage:
   python3 breakout_retrace_analysis.py 20250904.data
-  python3 breakout_retrace_analysis.py 20250904.data 20250909.data -o report.html --no-browser
+  python3 breakout_retrace_analysis.py /path/to/data/dir
+  python3 breakout_retrace_analysis.py /path/to/data/dir 20250909.data -o report.html --no-browser
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import sys
 from pathlib import Path
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 try:
     import numpy as np
@@ -72,6 +74,26 @@ def load_ticks(filepath: str) -> pd.DataFrame:
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df = df.sort_values('timestamp').reset_index(drop=True)
     return df
+
+
+def resolve_inputs(paths: list[str]) -> list[str]:
+    """Resolve a mix of files and directories into a sorted list of .data files."""
+    files = []
+    for p in paths:
+        if os.path.isdir(p):
+            found = sorted(glob.glob(os.path.join(p, '*.data')))
+            if not found:
+                print(f"Warning: no .data files found in directory {p}", file=sys.stderr)
+            files.extend(found)
+        elif os.path.isfile(p):
+            files.append(p)
+        else:
+            print(f"Error: path not found: {p}", file=sys.stderr)
+            sys.exit(1)
+    if not files:
+        print("Error: no .data files resolved from the given inputs.", file=sys.stderr)
+        sys.exit(1)
+    return sorted(set(files))
 
 
 def load_multiple(filepaths: list[str]) -> pd.DataFrame:
@@ -189,30 +211,30 @@ class PatternEvent:
     # Pre-breakout participant strength
     max_single_buy_pre: float
     max_single_sell_pre: float
-    dominant_side_pre: str  # 'BUY' or 'SELL'
-    dominant_strength_pre: float  # max single event of dominant side
+    dominant_side_pre: str
+    dominant_strength_pre: float
 
     # Breakout
     breakout_time: pd.Timestamp
-    breakout_direction: str  # 'UP' or 'DOWN'
+    breakout_direction: str
     breakout_close: float
     breakout_body_ticks: float
     breakout_volume: float
     breakout_imbalance: float
-    breakout_vwap_position: float  # 0=at range, 1=at close (conviction)
+    breakout_vwap_position: float
 
     # Retracement
     retrace_bars: int
-    retrace_extreme: float  # deepest point of retracement
-    retrace_pct: float  # how far back into range (0=none, 1=full range)
-    retrace_level_type: str  # 'low_activity' or 'high_one_sided'
+    retrace_extreme: float
+    retrace_pct: float
+    retrace_level_type: str
     retrace_buy_vol: float
     retrace_sell_vol: float
     retrace_imbalance: float
 
     # Continuation (50/20 result)
-    entry_price: float  # price at end of retracement
-    outcome: str  # 'success' or 'fail' or 'timeout'
+    entry_price: float
+    outcome: str
     ticks_to_resolve: int
     seconds_to_resolve: float
 
@@ -222,7 +244,6 @@ def detect_consolidations(
     min_bars: int = 5,
     max_bars: int = 10,
     min_vol_per_bar: float = 2000,
-    min_balance: float = 0.4,
 ) -> list[tuple[int, int]]:
     """Find runs of bars that qualify as consolidation zones.
 
@@ -232,7 +253,6 @@ def detect_consolidations(
     zones = []
     i = 0
     while i <= n - min_bars:
-        # Try extending from i as far as max_bars
         best_end = None
         for length in range(min_bars, min(max_bars + 1, n - i + 1)):
             window = bars.iloc[i:i + length]
@@ -276,7 +296,6 @@ def _classify_retrace_level(
     """Is the retracement level at a low-activity or high-one-sided price?"""
     if vp_consol.empty:
         return 'unknown'
-    # Find closest price level in the consolidation profile
     diffs = (vp_consol['price'] - retrace_price).abs()
     nearest_idx = diffs.idxmin()
     row = vp_consol.loc[nearest_idx]
@@ -285,7 +304,6 @@ def _classify_retrace_level(
 
     if total < median_vol * 0.5:
         return 'low_activity'
-    # Check if one-sided
     buy = row['buy_vol']
     sell = row['sell_vol']
     if (buy + sell) > 0:
@@ -310,13 +328,12 @@ def scan_patterns(
 ) -> list[PatternEvent]:
     """Scan bars for the full breakout-retrace-continuation pattern."""
 
-    bar_times = bars.index.to_series()
     prices_arr = ticks['price'].to_numpy(dtype=float)
     ts_arr = ticks['timestamp'].to_numpy()
     n_ticks = len(ticks)
 
     zones = detect_consolidations(
-        bars, min_consol_bars, max_consol_bars, min_vol_per_bar, min_balance,
+        bars, min_consol_bars, max_consol_bars, min_vol_per_bar,
     )
 
     events: list[PatternEvent] = []
@@ -362,7 +379,7 @@ def scan_patterns(
             bo_dir = 'DOWN'
             range_boundary = consol_low
         else:
-            continue  # no breakout
+            continue
 
         body = abs(bo_bar['body_ticks'])
         if body < min_breakout_body:
@@ -371,13 +388,11 @@ def scan_patterns(
         bo_time = bars.index[bo_idx]
         bo_end_time = bo_time + pd.Timedelta('1min')
 
-        # VWAP position within breakout candle
         vwap_pos = _breakout_vwap_position(
             ticks, bo_time, bo_end_time, range_boundary, bo_bar['close'],
         )
 
         # --- Retracement phase ---
-        retrace_found = False
         for r_len in range(1, min(max_retrace_bars + 1, len(bars) - bo_idx)):
             r_start = bo_idx + 1
             r_end = bo_idx + r_len
@@ -387,7 +402,6 @@ def scan_patterns(
 
             if bo_dir == 'UP':
                 retrace_extreme = float(retrace_window['low'].min())
-                # Retracement %: how far back into range from breakout close
                 bo_extreme = float(bo_bar['close'])
                 if bo_extreme <= consol_high:
                     continue
@@ -404,21 +418,15 @@ def scan_patterns(
                 retrace_pct = retrace_dist / total_dist if total_dist > 0 else 0
 
             if retrace_pct >= min_retrace_pct:
-                retrace_found = True
-
                 # Retracement volume characteristics
-                r_time_start = bars.index[r_start]
-                r_time_end = bars.index[r_end] + pd.Timedelta('1min')
                 r_buy = float(retrace_window['buy_volume'].sum())
                 r_sell = float(retrace_window['sell_volume'].sum())
                 r_total = r_buy + r_sell
                 r_imbalance = (r_buy - r_sell) / r_total if r_total > 0 else 0
 
-                # Classify retracement level
                 level_type = _classify_retrace_level(vp_consol, retrace_extreme)
 
                 # --- Continuation: 50/20 first-touch from retrace extreme ---
-                # Find the tick index at the end of retracement
                 entry_time = bars.index[r_end] + pd.Timedelta('1min')
                 entry_tick_idx = int(np.searchsorted(ts_arr, np.datetime64(entry_time), side='left'))
                 if entry_tick_idx >= n_ticks:
@@ -459,7 +467,7 @@ def scan_patterns(
                             break
 
                 resolve_time = ticks.iloc[resolve_idx]['timestamp']
-                secs = (resolve_time - entry_time).total_seconds() if hasattr(resolve_time, 'total_seconds') else (pd.Timestamp(resolve_time) - pd.Timestamp(entry_time)).total_seconds()
+                secs = (pd.Timestamp(resolve_time) - pd.Timestamp(entry_time)).total_seconds()
 
                 events.append(PatternEvent(
                     consol_start=t_consol_start,
@@ -507,10 +515,7 @@ def events_to_dataframe(events: list[PatternEvent]) -> pd.DataFrame:
     """Convert pattern events to a DataFrame for analysis."""
     if not events:
         return pd.DataFrame()
-    rows = []
-    for ev in events:
-        rows.append(ev.__dict__)
-    return pd.DataFrame(rows)
+    return pd.DataFrame([ev.__dict__ for ev in events])
 
 
 def compute_statistics(df: pd.DataFrame) -> dict:
@@ -520,7 +525,6 @@ def compute_statistics(df: pd.DataFrame) -> dict:
 
     stats = {}
 
-    # Overall hit rate
     resolved = df[df['outcome'] != 'timeout']
     n_total = len(resolved)
     n_success = (resolved['outcome'] == 'success').sum()
@@ -706,9 +710,8 @@ def build_html_report(
         ('VWAP Conviction', 'by_vwap_conviction'),
     ]
 
-    # Count non-empty sections
     active = [(t, k) for t, k in sections if stats.get(k)]
-    n_panels = len(active) + 1  # +1 for summary
+    n_panels = len(active) + 1
     cols = 2
     rows = (n_panels + 1) // 2
 
@@ -740,7 +743,6 @@ def build_html_report(
     )
 
     # Each stratification as hit-rate bar chart
-    colors_hit = '#2e7d32'
     for panel_i, (panel_title, key) in enumerate(active, start=1):
         data = stats[key]
         r = (panel_i // cols) + 1
@@ -752,8 +754,8 @@ def build_html_report(
             go.Bar(
                 x=cats,
                 y=rates,
-                marker_color=colors_hit,
-                text=[f'{r:.0%} (n={n})' for r, n in zip(rates, ns)],
+                marker_color='#2e7d32',
+                text=[f'{rate:.0%} (n={n})' for rate, n in zip(rates, ns)],
                 textposition='outside',
                 showlegend=False,
                 hovertemplate='%{x}<br>hit_rate=%{y:.1%}<br>n=%{customdata}<extra></extra>',
@@ -846,11 +848,13 @@ def main():
         epilog="""
 Examples:
   %(prog)s 20250904.data
-  %(prog)s 20250904.data 20250909.data --min-vol 1500
+  %(prog)s /path/to/data/directory
+  %(prog)s /path/to/dir 20250909.data --min-vol 1500
   %(prog)s 20250904.data --min-retrace 0.6 --target-ticks 40 -o report.html
         """,
     )
-    parser.add_argument('input_files', nargs='+', help='Binary .data file(s)')
+    parser.add_argument('input_paths', nargs='+',
+                        help='Binary .data file(s) and/or directories containing .data files')
     parser.add_argument('--min-consol', type=int, default=5,
                         help='Min consolidation bars (default: 5)')
     parser.add_argument('--max-consol', type=int, default=10,
@@ -874,13 +878,13 @@ Examples:
                         help='Do not auto-open browser')
     args = parser.parse_args()
 
-    for fp in args.input_files:
-        if not os.path.isfile(fp):
-            print(f'Error: File not found: {fp}', file=sys.stderr)
-            sys.exit(1)
+    filepaths = resolve_inputs(args.input_paths)
+    print(f'Resolved {len(filepaths)} .data file(s):')
+    for fp in filepaths:
+        print(f'  {fp}')
 
     run(
-        args.input_files,
+        filepaths,
         min_consol_bars=args.min_consol,
         max_consol_bars=args.max_consol,
         min_vol_per_bar=args.min_vol,
