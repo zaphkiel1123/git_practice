@@ -1,5 +1,8 @@
 .venv/
 *.parquet
+features.csv
 direction_model.txt
 magnitude_model.txt
+direction_model.pkl
+magnitude_model.pkl
 model_results.json

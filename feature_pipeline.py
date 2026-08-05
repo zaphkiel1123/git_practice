@@ -4,11 +4,11 @@ Feature Extraction Pipeline for .data binary transaction files.
 
 Reads all .data files in a directory, computes per-window features
 (order flow, intensity, momentum, volatility), constructs labels
-(direction and magnitude), and outputs a Parquet file ready for modeling.
+(direction and magnitude), and outputs a Parquet or CSV file ready for modeling.
 
 Usage:
     python3 feature_pipeline.py /path/to/data/dir --window 1min --horizon 5min
-    python3 feature_pipeline.py /path/to/data/dir --window 1min --horizon 5min --output features.parquet
+    python3 feature_pipeline.py /path/to/data/dir --window 1min --horizon 5min --output features.csv
 """
 
 import struct
@@ -241,8 +241,8 @@ def add_labels(bars, horizon='5min'):
     bars['future_return'] = (bars['future_close'] - bars['close']) / bars['close']
     bars['magnitude_label'] = (bars['future_close'] - bars['close']).abs()
 
-    # Direction: +1 up, -1 down, 0 unchanged
-    bars['direction_label'] = np.sign(bars['future_close'] - bars['close']).astype(int)
+    # Direction: +1 up, -1 down, 0 unchanged (keep as float to handle NaN at edges)
+    bars['direction_label'] = np.sign(bars['future_close'] - bars['close'])
 
     return bars
 
@@ -321,9 +321,18 @@ def run_pipeline(data_dir, window='1min', horizon='5min', output=None):
 
     # Save output
     if output is None:
-        output = os.path.join(data_dir, 'features.parquet')
+        output = os.path.join(data_dir, 'features.csv')
 
-    complete_bars.to_parquet(output)
+    if output.endswith('.parquet'):
+        try:
+            complete_bars.to_parquet(output)
+        except ImportError:
+            output = output.replace('.parquet', '.csv')
+            print(f"  pyarrow not available, falling back to CSV")
+            complete_bars.to_csv(output)
+    else:
+        complete_bars.to_csv(output)
+
     print(f"\nSaved feature matrix to: {output}")
     print(f"File size: {os.path.getsize(output):,} bytes")
 

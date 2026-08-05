@@ -22,11 +22,18 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
+
+try:
+    import lightgbm as lgb
+    HAS_LIGHTGBM = True
+except ImportError:
+    HAS_LIGHTGBM = False
+
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, mean_absolute_error, mean_squared_error, r2_score
 )
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 
 warnings.filterwarnings('ignore', category=UserWarning)
 
@@ -71,7 +78,7 @@ def walk_forward_split(df, n_folds=5, min_train_ratio=0.3):
 
 
 def train_direction_model(X_train, y_train, X_test, y_test):
-    """Train a LightGBM classifier for direction prediction."""
+    """Train a classifier for direction prediction (LightGBM or sklearn fallback)."""
     # Filter out FLAT (0) labels for cleaner binary classification
     train_mask = y_train != 0
     test_mask = y_test != 0
@@ -85,24 +92,27 @@ def train_direction_model(X_train, y_train, X_test, y_test):
     if len(X_tr) == 0 or len(X_te) == 0:
         return None, None, None
 
-    params = {
-        'objective': 'binary',
-        'metric': 'binary_logloss',
-        'verbosity': -1,
-        'num_leaves': 31,
-        'learning_rate': 0.05,
-        'feature_fraction': 0.8,
-        'bagging_fraction': 0.8,
-        'bagging_freq': 5,
-        'n_estimators': 300,
-        'early_stopping_rounds': 30,
-    }
-
-    model = lgb.LGBMClassifier(**params)
-    model.fit(
-        X_tr, y_tr,
-        eval_set=[(X_te, y_te)],
-    )
+    if HAS_LIGHTGBM:
+        params = {
+            'objective': 'binary',
+            'metric': 'binary_logloss',
+            'verbosity': -1,
+            'num_leaves': 31,
+            'learning_rate': 0.05,
+            'feature_fraction': 0.8,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 5,
+            'n_estimators': 300,
+            'early_stopping_rounds': 30,
+        }
+        model = lgb.LGBMClassifier(**params)
+        model.fit(X_tr, y_tr, eval_set=[(X_te, y_te)])
+    else:
+        model = GradientBoostingClassifier(
+            n_estimators=200, learning_rate=0.05, max_depth=5,
+            subsample=0.8, random_state=42
+        )
+        model.fit(X_tr, y_tr)
 
     y_pred = model.predict(X_te)
     y_prob = model.predict_proba(X_te)[:, 1]
@@ -114,15 +124,15 @@ def train_direction_model(X_train, y_train, X_test, y_test):
         'f1': f1_score(y_te, y_pred, zero_division=0),
         'n_train': len(X_tr),
         'n_test': len(X_te),
-        'train_up_pct': y_tr.mean(),
-        'test_up_pct': y_te.mean(),
+        'train_up_pct': float(y_tr.mean()),
+        'test_up_pct': float(y_te.mean()),
     }
 
     return model, metrics, y_prob
 
 
 def train_magnitude_model(X_train, y_train, X_test, y_test):
-    """Train a LightGBM regressor for magnitude prediction."""
+    """Train a regressor for magnitude prediction (LightGBM or sklearn fallback)."""
     # Remove rows where magnitude is 0 or NaN
     train_mask = y_train > 0
     test_mask = y_test > 0
@@ -135,33 +145,36 @@ def train_magnitude_model(X_train, y_train, X_test, y_test):
     if len(X_tr) == 0 or len(X_te) == 0:
         return None, None
 
-    params = {
-        'objective': 'regression',
-        'metric': 'mae',
-        'verbosity': -1,
-        'num_leaves': 31,
-        'learning_rate': 0.05,
-        'feature_fraction': 0.8,
-        'bagging_fraction': 0.8,
-        'bagging_freq': 5,
-        'n_estimators': 300,
-        'early_stopping_rounds': 30,
-    }
-
-    model = lgb.LGBMRegressor(**params)
-    model.fit(
-        X_tr, y_tr,
-        eval_set=[(X_te, y_te)],
-    )
+    if HAS_LIGHTGBM:
+        params = {
+            'objective': 'regression',
+            'metric': 'mae',
+            'verbosity': -1,
+            'num_leaves': 31,
+            'learning_rate': 0.05,
+            'feature_fraction': 0.8,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 5,
+            'n_estimators': 300,
+            'early_stopping_rounds': 30,
+        }
+        model = lgb.LGBMRegressor(**params)
+        model.fit(X_tr, y_tr, eval_set=[(X_te, y_te)])
+    else:
+        model = GradientBoostingRegressor(
+            n_estimators=200, learning_rate=0.05, max_depth=5,
+            subsample=0.8, random_state=42
+        )
+        model.fit(X_tr, y_tr)
 
     y_pred = model.predict(X_te)
 
     metrics = {
         'mae': mean_absolute_error(y_te, y_pred),
-        'rmse': np.sqrt(mean_squared_error(y_te, y_pred)),
+        'rmse': float(np.sqrt(mean_squared_error(y_te, y_pred))),
         'r2': r2_score(y_te, y_pred),
-        'mean_actual': y_te.mean(),
-        'mean_predicted': y_pred.mean(),
+        'mean_actual': float(y_te.mean()),
+        'mean_predicted': float(y_pred.mean()),
         'n_train': len(X_tr),
         'n_test': len(X_te),
     }
@@ -173,15 +186,24 @@ def compute_feature_importance(model, feature_names, top_n=15):
     """Extract top feature importances from a trained model."""
     importance = model.feature_importances_
     indices = np.argsort(importance)[::-1][:top_n]
-    return [(feature_names[i], int(importance[i])) for i in indices]
+    return [(feature_names[i], float(importance[i])) for i in indices]
 
 
 def run_training(parquet_path, n_folds=5, output_dir=None):
     """Run the full walk-forward training and evaluation."""
     print(f"Loading features from: {parquet_path}")
-    df = pd.read_parquet(parquet_path)
+
+    if parquet_path.endswith('.parquet'):
+        df = pd.read_parquet(parquet_path)
+    else:
+        df = pd.read_csv(parquet_path, index_col=0, parse_dates=True)
+
     print(f"  Shape: {df.shape}")
     print(f"  Time range: {df.index.min()} → {df.index.max()}")
+    if HAS_LIGHTGBM:
+        print(f"  Backend: LightGBM")
+    else:
+        print(f"  Backend: sklearn GradientBoosting (LightGBM not available)")
 
     feature_cols = get_feature_columns(df)
     print(f"  Feature columns: {len(feature_cols)}")
@@ -301,13 +323,25 @@ def run_training(parquet_path, n_folds=5, output_dir=None):
 
     # Save models
     if best_dir_model:
-        dir_model_path = os.path.join(output_dir, 'direction_model.txt')
-        best_dir_model.booster_.save_model(dir_model_path)
+        if HAS_LIGHTGBM:
+            dir_model_path = os.path.join(output_dir, 'direction_model.txt')
+            best_dir_model.booster_.save_model(dir_model_path)
+        else:
+            import pickle
+            dir_model_path = os.path.join(output_dir, 'direction_model.pkl')
+            with open(dir_model_path, 'wb') as f:
+                pickle.dump(best_dir_model, f)
         print(f"  Direction model saved to: {dir_model_path}")
 
     if best_mag_model:
-        mag_model_path = os.path.join(output_dir, 'magnitude_model.txt')
-        best_mag_model.booster_.save_model(mag_model_path)
+        if HAS_LIGHTGBM:
+            mag_model_path = os.path.join(output_dir, 'magnitude_model.txt')
+            best_mag_model.booster_.save_model(mag_model_path)
+        else:
+            import pickle
+            mag_model_path = os.path.join(output_dir, 'magnitude_model.pkl')
+            with open(mag_model_path, 'wb') as f:
+                pickle.dump(best_mag_model, f)
         print(f"  Magnitude model saved to: {mag_model_path}")
 
     print(f"\n{'='*60}")
