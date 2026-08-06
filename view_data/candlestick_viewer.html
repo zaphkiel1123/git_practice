@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Footprint Candlestick Viewer</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1e1e1e; color: #d4d4d4; }
+    #controls { padding: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    #controls label { cursor: pointer; padding: 6px 14px; background: #2d5a9e; border-radius: 4px; font-size: 14px; }
+    #controls label:hover { background: #3a6db5; }
+    .file-input { display: none; }
+    #info { font-size: 13px; color: #888; }
+    #chart-container { width: 100%; height: calc(100vh - 48px); }
+</style>
+</head>
+<body>
+<div id="controls">
+    <label for="tick-input">Load tick .data (57-byte)</label>
+    <input type="file" id="tick-input" class="file-input" accept=".data,.bin" />
+    <label for="minute-input">Load minute .data (60-byte)</label>
+    <input type="file" id="minute-input" class="file-input" accept=".data,.bin" />
+    <span id="info">Load a tick-level or minute-bar binary .data file</span>
+</div>
+<div id="chart-container"></div>
+
+<script src="https://unpkg.com/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+(function() {
+    'use strict';
+
+    const TICK_RECORD_SIZE = 57;
+    const MINUTE_RECORD_SIZE = 60;
+    const DOTNET_EPOCH_UNIX_SEC = -62135596800;
+    const TICK_SIZE = 0.25;
+
+    const container = document.getElementById('chart-container');
+    const info = document.getElementById('info');
+
+    const chart = LightweightCharts.createChart(container, {
+        layout: { background: { color: '#1e1e1e' }, textColor: '#d4d4d4' },
+        grid: { vertLines: { color: '#2a2a2a' }, horzLines: { color: '#2a2a2a' } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        timeScale: {
+            timeVisible: true,
+            secondsVisible: false,
+            borderColor: '#3a3a3a',
+        },
+        rightPriceScale: { borderColor: '#3a3a3a' },
+        handleScroll: { mouseWheel: true, pressedMouseMove: true },
+        handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
+    });
+
+    const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+        upColor: 'transparent',
+        downColor: 'transparent',
+        borderUpColor: 'transparent',
+        borderDownColor: 'transparent',
+        wickUpColor: 'transparent',
+        wickDownColor: 'transparent',
+    });
+
+    const volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'volume',
+    }, 1);
+
+    chart.priceScale('volume').applyOptions({
+        scaleMargins: { top: 0, bottom: 0 },
+    });
+
+    // --- Footprint data store: Map<time, Map<price, {buy, sell}>> ---
+    let footprintData = new Map();
+
+    // --- Footprint primitive plugin ---
+    class FootprintPrimitive {
+        constructor(series, chart) {
+            this._series = series;
+            this._chart = chart;
+        }
+
+        updateAllViews() {}
+
+        paneViews() {
+            return [new FootprintPaneView(this._series, this._chart)];
+        }
+    }
+
+    class FootprintPaneView {
+        constructor(series, chart) {
+            this._series = series;
+            this._chart = chart;
+        }
+
+        update() {}
+
+        renderer() {
+            return new FootprintRenderer(this._series, this._chart);
+        }
+
+        zOrder() { return 'top'; }
+    }
+
+    class FootprintRenderer {
+        constructor(series, chart) {
+            this._series = series;
+            this._chart = chart;
+        }
+
+        draw(target) {
+            target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
+                const timeScale = this._chart.timeScale();
+                const visibleRange = timeScale.getVisibleLogicalRange();
+                if (!visibleRange) return;
+
+                const data = this._series.data();
+                if (!data || data.length === 0) return;
+
+                const startIdx = Math.max(0, Math.floor(visibleRange.from));
+                const endIdx = Math.min(data.length - 1, Math.ceil(visibleRange.to));
+
+                const barsVisible = visibleRange.to - visibleRange.from;
+                const barWidth = mediaSize.width / barsVisible;
+
+                // Layout zones (relative to bar center x):
+                // Candle: [-0.45, -0.25] of barWidth (narrow, left side)
+                // Footprint: [-0.15, +0.45] of barWidth (right side)
+                const candleLeft = -0.40 * barWidth;
+                const candleRight = -0.20 * barWidth;
+                const candleMid = (candleLeft + candleRight) / 2;
+                const candleW = candleRight - candleLeft;
+
+                const fpLeftOff = -0.12 * barWidth;
+                const fpRightOff = 0.45 * barWidth;
+                const fpWidth = fpRightOff - fpLeftOff;
+                const fpCenterOff = (fpLeftOff + fpRightOff) / 2;
+                const fpHalfW = fpWidth / 2;
+
+                const fontSize = Math.max(7, Math.min(11, barWidth * 0.11));
+                ctx.textBaseline = 'middle';
+
+                for (let i = startIdx; i <= endIdx; i++) {
+                    const bar = data[i];
+                    if (!bar) continue;
+
+                    const x = timeScale.timeToCoordinate(bar.time);
+                    if (x === null) continue;
+
+                    const isUp = bar.close >= bar.open;
+
+                    // --- Draw custom narrow candle ---
+                    const openY = this._series.priceToCoordinate(bar.open);
+                    const closeY = this._series.priceToCoordinate(bar.close);
+                    const highY = this._series.priceToCoordinate(bar.high);
+                    const lowY = this._series.priceToCoordinate(bar.low);
+                    if (openY === null || closeY === null || highY === null || lowY === null) continue;
+
+                    const bodyTop = Math.min(openY, closeY);
+                    const bodyBot = Math.max(openY, closeY);
+                    const bodyH = Math.max(bodyBot - bodyTop, 1);
+                    const color = isUp ? '#26a69a' : '#ef5350';
+
+                    // Wick
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(x + candleMid, highY);
+                    ctx.lineTo(x + candleMid, lowY);
+                    ctx.stroke();
+
+                    // Body
+                    ctx.fillStyle = color;
+                    ctx.fillRect(x + candleLeft, bodyTop, candleW, bodyH);
+
+                    // --- Footprint ---
+                    const levels = footprintData.get(bar.time);
+                    if (!levels || levels.size === 0) continue;
+
+                    // Find max volume at any single level for scaling
+                    let maxVol = 0;
+                    for (const [, counts] of levels) {
+                        maxVol = Math.max(maxVol, counts.buy, counts.sell);
+                    }
+                    if (maxVol === 0) maxVol = 1;
+
+                    ctx.font = `${fontSize}px monospace`;
+
+                    for (const [price, counts] of levels) {
+                        const y = this._series.priceToCoordinate(price);
+                        if (y === null) continue;
+
+                        const nextY = this._series.priceToCoordinate(price - TICK_SIZE);
+                        const cellH = nextY !== null ? Math.abs(nextY - y) : fontSize + 2;
+                        const h = Math.max(cellH * 0.85, fontSize + 1);
+
+                        const fpCX = x + fpCenterOff;
+                        const fpLX = x + fpLeftOff;
+
+                        // Volume profile bars (background)
+                        const buyBarW = (counts.buy / maxVol) * fpHalfW;
+                        const sellBarW = (counts.sell / maxVol) * fpHalfW;
+
+                        ctx.fillStyle = 'rgba(38,166,154,0.25)';
+                        ctx.fillRect(fpCX, y - h / 2, buyBarW, h);
+
+                        ctx.fillStyle = 'rgba(239,83,80,0.25)';
+                        ctx.fillRect(fpCX - sellBarW, y - h / 2, sellBarW, h);
+
+
+
+                        // Text labels
+                        if (barWidth > 50 && fontSize >= 7) {
+                            const sellX = fpCX - fpHalfW * 0.5;
+                            const buyX = fpCX + fpHalfW * 0.5;
+
+                            ctx.textAlign = 'center';
+                            ctx.fillStyle = counts.sell > counts.buy ? '#ff6b6b' : '#666';
+                            ctx.fillText(counts.sell.toString(), sellX, y);
+
+                            ctx.fillStyle = counts.buy > counts.sell ? '#4aedc4' : '#666';
+                            ctx.fillText(counts.buy.toString(), buyX, y);
+                        } else if (barWidth > 25 && fontSize >= 7) {
+                            const net = counts.buy - counts.sell;
+                            ctx.textAlign = 'center';
+                            ctx.fillStyle = net > 0 ? '#4aedc4' : net < 0 ? '#ff6b6b' : '#666';
+                            ctx.fillText(net > 0 ? `+${net}` : net.toString(), fpCX, y);
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    const footprintPrimitive = new FootprintPrimitive(candleSeries, chart);
+    candleSeries.attachPrimitive(footprintPrimitive);
+
+    // --- Timestamp decoding ---
+    function ticksToUnixSeconds(ticksHi, ticksLo) {
+        const ticks = BigInt(ticksHi) * BigInt(0x100000000) + BigInt(ticksLo >>> 0);
+        const seconds = Number(ticks / 10000000n);
+        return seconds + DOTNET_EPOCH_UNIX_SEC;
+    }
+
+    function floorToMinute(unixSec) {
+        return unixSec - (unixSec % 60);
+    }
+
+    // --- Decode 57-byte tick records into minute bars with footprint ---
+    function decodeTickData(buffer) {
+        const view = new DataView(buffer);
+        const numRecords = Math.floor(buffer.byteLength / TICK_RECORD_SIZE);
+        const barMap = new Map(); // time -> {open, high, low, close, volume, levels}
+
+        for (let i = 0; i < numRecords; i++) {
+            const offset = i * TICK_RECORD_SIZE;
+
+            const ticksLo = view.getUint32(offset, true);
+            const ticksHi = view.getUint32(offset + 4, true);
+            const rawTime = ticksToUnixSeconds(ticksHi, ticksLo);
+            const time = floorToMinute(rawTime);
+
+            const price = view.getFloat64(offset + 8, true);
+            const levelLow = view.getFloat64(offset + 16, true);
+            const levelHigh = view.getFloat64(offset + 24, true);
+            const txnCount = view.getUint32(offset + 32, true);
+
+            // Infer direction: trade at ask = BUY, trade at bid = SELL
+            const isBuy = Math.abs(price - levelHigh) < 1e-9;
+
+            let bar = barMap.get(time);
+            if (!bar) {
+                bar = { open: price, high: price, low: price, close: price, volume: 0, levels: new Map() };
+                barMap.set(time, bar);
+            } else {
+                bar.high = Math.max(bar.high, price);
+                bar.low = Math.min(bar.low, price);
+                bar.close = price;
+            }
+            bar.volume += txnCount;
+
+            // Accumulate per-level buy/sell
+            let lvl = bar.levels.get(price);
+            if (!lvl) {
+                lvl = { buy: 0, sell: 0 };
+                bar.levels.set(price, lvl);
+            }
+            if (isBuy) lvl.buy += txnCount;
+            else lvl.sell += txnCount;
+        }
+
+        // Sort by time and build arrays
+        const times = [...barMap.keys()].sort((a, b) => a - b);
+        const candles = [];
+        const volumes = [];
+        footprintData = new Map();
+
+        for (const time of times) {
+            const bar = barMap.get(time);
+            candles.push({ time, open: bar.open, high: bar.high, low: bar.low, close: bar.close });
+            volumes.push({
+                time,
+                value: bar.volume,
+                color: bar.close >= bar.open ? 'rgba(38,166,154,0.4)' : 'rgba(239,83,80,0.4)',
+            });
+            footprintData.set(time, bar.levels);
+        }
+
+        return { candles, volumes, numRecords };
+    }
+
+    // --- Decode 60-byte minute-bar records ---
+    function decodeMinuteData(buffer) {
+        const view = new DataView(buffer);
+        const numRecords = Math.floor(buffer.byteLength / MINUTE_RECORD_SIZE);
+        const candles = [];
+        const volumes = [];
+        footprintData = new Map();
+
+        for (let i = 0; i < numRecords; i++) {
+            const offset = i * MINUTE_RECORD_SIZE;
+
+            const ticksLo = view.getUint32(offset, true);
+            const ticksHi = view.getUint32(offset + 4, true);
+            const time = ticksToUnixSeconds(ticksHi, ticksLo);
+
+            const high  = view.getFloat64(offset + 8, true);
+            const low   = view.getFloat64(offset + 16, true);
+            const open  = view.getFloat64(offset + 24, true);
+            const close = view.getFloat64(offset + 32, true);
+
+            const sellCount = view.getUint32(offset + 40, true);
+            const buyCount  = view.getUint32(offset + 44, true);
+            const volume    = view.getUint32(offset + 48, true);
+
+            candles.push({ time, open, high, low, close });
+            volumes.push({
+                time,
+                value: volume,
+                color: close >= open ? 'rgba(38,166,154,0.4)' : 'rgba(239,83,80,0.4)',
+            });
+
+            // For minute data, show aggregate buy/sell at the close price level
+            const levels = new Map();
+            levels.set(close, { buy: buyCount, sell: sellCount });
+            footprintData.set(time, levels);
+        }
+
+        return { candles, volumes, numRecords };
+    }
+
+    function loadData(candles, volumes, numRecords, fileName) {
+        if (candles.length === 0) {
+            info.textContent = 'No records found in file.';
+            return;
+        }
+
+        candleSeries.setData(candles);
+        volumeSeries.setData(volumes);
+        chart.timeScale().fitContent();
+
+        const first = new Date(candles[0].time * 1000).toISOString().slice(0, 16);
+        const last = new Date(candles[candles.length - 1].time * 1000).toISOString().slice(0, 16);
+        info.textContent = `${fileName} — ${numRecords} records → ${candles.length} bars | ${first} → ${last} | Scroll to zoom, drag to pan`;
+    }
+
+    // Tick-level file (57-byte records)
+    document.getElementById('tick-input').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            const { candles, volumes, numRecords } = decodeTickData(evt.target.result);
+            loadData(candles, volumes, numRecords, file.name);
+        };
+        reader.readAsArrayBuffer(file);
+    });
+
+    // Minute-bar file (60-byte records)
+    document.getElementById('minute-input').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            const { candles, volumes, numRecords } = decodeMinuteData(evt.target.result);
+            loadData(candles, volumes, numRecords, file.name);
+        };
+        reader.readAsArrayBuffer(file);
+    });
+
+    // Responsive resize
+    const ro = new ResizeObserver(() => {
+        chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+    });
+    ro.observe(container);
+})();
+</script>
+</body>
+</html>
