@@ -312,9 +312,16 @@ def train_quality_model(X_train, y_train, X_test, y_test, feature_names):
 # Full Training Pipeline
 # ============================================================
 
+def _load_single_file(fp):
+    """Load one .data file and return (basename, len, dataframe)."""
+    df = decode_file_to_dataframe(fp)
+    return os.path.basename(fp), len(df), df
+
+
 def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60):
     """Run full feature + label pipeline on all .data files in directory."""
     import glob
+    from concurrent.futures import ProcessPoolExecutor
 
     pattern = os.path.join(data_dir, '*.data')
     files = sorted(glob.glob(pattern))
@@ -324,10 +331,10 @@ def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60):
 
     print(f"Found {len(files)} data file(s)")
     all_dfs = []
-    for fp in files:
-        df = decode_file_to_dataframe(fp)
-        all_dfs.append(df)
-        print(f"  {os.path.basename(fp)}: {len(df):,} ticks")
+    with ProcessPoolExecutor() as executor:
+        for name, n_ticks, df in executor.map(_load_single_file, files):
+            all_dfs.append(df)
+            print(f"  {name}: {n_ticks:,} ticks")
 
     raw_df = pd.concat(all_dfs, ignore_index=True).sort_values('timestamp').reset_index(drop=True)
     print(f"Total ticks: {len(raw_df):,}")
