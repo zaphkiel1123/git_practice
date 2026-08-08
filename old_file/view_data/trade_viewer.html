@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Trade Analysis Viewer</title>
+<style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1e1e1e; color: #d4d4d4; }
+    #controls { padding: 10px 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-bottom: 1px solid #333; }
+    #controls label, #controls button { cursor: pointer; padding: 5px 12px; background: #2d5a9e; border-radius: 4px; font-size: 13px; border: none; color: #d4d4d4; }
+    #controls label:hover, #controls button:hover { background: #3a6db5; }
+    #controls button.active { background: #1b8a5a; }
+    .file-input { display: none; }
+    #info { font-size: 12px; color: #888; flex: 1; }
+    #main { display: flex; height: calc(100vh - 42px); }
+    #chart-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    #chart-container { flex: 1; min-height: 0; }
+    #equity-container { height: 120px; border-top: 1px solid #333; }
+    #trade-panel { width: 320px; overflow-y: auto; border-left: 1px solid #333; font-size: 12px; }
+    #trade-panel .header { padding: 8px; background: #252525; font-weight: bold; border-bottom: 1px solid #333; }
+    #trade-panel .stats { padding: 8px; border-bottom: 1px solid #333; line-height: 1.6; }
+    #trade-panel .stats .win { color: #3efe35; }
+    #trade-panel .stats .lose { color: #ff1100; }
+    #trade-list { list-style: none; }
+    #trade-list li { padding: 6px 8px; border-bottom: 1px solid #2a2a2a; cursor: pointer; display: flex; gap: 6px; align-items: center; }
+    #trade-list li:hover { background: #2a2a2a; }
+    #trade-list li.win { border-left: 3px solid #3efe35; }
+    #trade-list li.loss { border-left: 3px solid #ff1100; }
+    #trade-list li .dir { font-weight: bold; width: 42px; }
+    #trade-list li .pnl { width: 55px; text-align: right; }
+    #trade-list li .time { color: #888; font-size: 11px; }
+    #filter-bar { padding: 6px 8px; display: flex; gap: 6px; border-bottom: 1px solid #333; }
+    #filter-bar button { padding: 3px 8px; font-size: 11px; background: #333; border: none; color: #d4d4d4; border-radius: 3px; cursor: pointer; }
+    #filter-bar button.active { background: #2d5a9e; }
+</style>
+</head>
+<body>
+<div id="controls">
+    <label for="data-input">Load .data</label>
+    <input type="file" id="data-input" class="file-input" accept=".data,.bin" />
+    <label for="trades-input">Load trades.json</label>
+    <input type="file" id="trades-input" class="file-input" accept=".json" />
+    <span id="info">Load a minute-bar .data file and trades.json</span>
+</div>
+<div id="main">
+    <div id="chart-panel">
+        <div id="chart-container"></div>
+        <div id="equity-container"></div>
+    </div>
+    <div id="trade-panel">
+        <div class="header">Trade Results</div>
+        <div class="stats" id="stats"></div>
+        <div id="filter-bar">
+            <button class="active" data-filter="all">All</button>
+            <button data-filter="win">Winners</button>
+            <button data-filter="loss">Losers</button>
+            <button data-filter="long">Longs</button>
+            <button data-filter="short">Shorts</button>
+        </div>
+        <ul id="trade-list"></ul>
+    </div>
+</div>
+
+<script src="https://unpkg.com/lightweight-charts@5.0.0/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+(function() {
+    'use strict';
+
+    const MINUTE_RECORD_SIZE = 60;
+    const DOTNET_EPOCH_UNIX_SEC = -62135596800;
+
+    const chartContainer = document.getElementById('chart-container');
+    const equityContainer = document.getElementById('equity-container');
+    const info = document.getElementById('info');
+
+    const chartOpts = {
+        layout: { background: { color: '#1e1e1e' }, textColor: '#d4d4d4' },
+        grid: { vertLines: { visible: false }, horzLines: { visible: false } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#3a3a3a' },
+        rightPriceScale: { borderColor: '#3a3a3a' },
+    };
+
+    const chart = LightweightCharts.createChart(chartContainer, chartOpts);
+    const candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+        upColor: '#3efe35', downColor: '#ff1100',
+        borderUpColor: '#3efe35', borderDownColor: '#ff1100',
+        wickUpColor: '#3efe35', wickDownColor: '#ff1100',
+    });
+    const volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+        priceFormat: { type: 'volume' }, priceScaleId: 'volume',
+    }, 1);
+    chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0, bottom: 0 } });
+
+    const equityChart = LightweightCharts.createChart(equityContainer, {
+        ...chartOpts,
+        rightPriceScale: { borderColor: '#3a3a3a' },
+        timeScale: { timeVisible: true, borderColor: '#3a3a3a' },
+    });
+    const equitySeries = equityChart.addSeries(LightweightCharts.AreaSeries, {
+        lineColor: '#2962ff', topColor: 'rgba(41,98,255,0.3)', bottomColor: 'rgba(41,98,255,0.0)',
+        lineWidth: 2,
+    });
+
+    let tradeData = [];
+    let currentFilter = 'all';
+
+    // Trade marker primitive
+    class TradeOverlayPrimitive {
+        constructor(series, chart) { this._series = series; this._chart = chart; }
+        updateAllViews() {}
+        paneViews() { return [new TradeOverlayPaneView(this._series, this._chart)]; }
+    }
+    class TradeOverlayPaneView {
+        constructor(series, chart) { this._series = series; this._chart = chart; }
+        update() {}
+        renderer() { return new TradeOverlayRenderer(this._series, this._chart); }
+        zOrder() { return 'top'; }
+    }
+    class TradeOverlayRenderer {
+        constructor(series, chart) { this._series = series; this._chart = chart; }
+        draw(target) {
+            target.useMediaCoordinateSpace(({ context: ctx }) => {
+                if (tradeData.length === 0) return;
+                const timeScale = this._chart.timeScale();
+                const visibleRange = timeScale.getVisibleLogicalRange();
+                if (!visibleRange) return;
+
+                const filtered = getFilteredTrades();
+
+                for (const trade of filtered) {
+                    const entryX = timeScale.timeToCoordinate(trade.entry_time);
+                    const exitX = timeScale.timeToCoordinate(trade.exit_time);
+                    if (entryX === null) continue;
+
+                    const entryY = this._series.priceToCoordinate(trade.entry_price);
+                    const slY = this._series.priceToCoordinate(trade.sl_price);
+                    const tpY = this._series.priceToCoordinate(trade.tp_price);
+                    if (entryY === null || slY === null || tpY === null) continue;
+
+                    const isWin = trade.result === 'WIN';
+                    const isLong = trade.direction === 'LONG';
+                    const rightX = exitX !== null ? exitX : entryX + 60;
+
+                    // Entry triangle
+                    ctx.fillStyle = isLong ? '#3efe35' : '#ff1100';
+                    ctx.beginPath();
+                    if (isLong) {
+                        ctx.moveTo(entryX, entryY + 5);
+                        ctx.lineTo(entryX - 4, entryY + 12);
+                        ctx.lineTo(entryX + 4, entryY + 12);
+                    } else {
+                        ctx.moveTo(entryX, entryY - 5);
+                        ctx.lineTo(entryX - 4, entryY - 12);
+                        ctx.lineTo(entryX + 4, entryY - 12);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+
+                    // SL line
+                    ctx.strokeStyle = 'rgba(255,17,0,0.6)';
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([4, 3]);
+                    ctx.beginPath();
+                    ctx.moveTo(entryX, slY);
+                    ctx.lineTo(rightX, slY);
+                    ctx.stroke();
+
+                    // TP line
+                    ctx.strokeStyle = 'rgba(62,254,53,0.6)';
+                    ctx.beginPath();
+                    ctx.moveTo(entryX, tpY);
+                    ctx.lineTo(rightX, tpY);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+
+                    // Exit dot
+                    if (exitX !== null) {
+                        const exitY = this._series.priceToCoordinate(trade.exit_price);
+                        if (exitY !== null) {
+                            ctx.fillStyle = isWin ? '#3efe35' : '#ff1100';
+                            ctx.beginPath();
+                            ctx.arc(exitX, exitY, 3, 0, Math.PI * 2);
+                            ctx.fill();
+                        }
+                    }
+
+                    // PnL label
+                    ctx.font = '10px monospace';
+                    ctx.fillStyle = isWin ? '#3efe35' : '#ff1100';
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'bottom';
+                    ctx.fillText((trade.pnl_points >= 0 ? '+' : '') + trade.pnl_points.toFixed(2), entryX + 7, entryY - 2);
+                }
+            });
+        }
+    }
+    candleSeries.attachPrimitive(new TradeOverlayPrimitive(candleSeries, chart));
+
+    function getFilteredTrades() {
+        if (currentFilter === 'all') return tradeData;
+        if (currentFilter === 'win') return tradeData.filter(t => t.result === 'WIN');
+        if (currentFilter === 'loss') return tradeData.filter(t => t.result !== 'WIN');
+        if (currentFilter === 'long') return tradeData.filter(t => t.direction === 'LONG');
+        if (currentFilter === 'short') return tradeData.filter(t => t.direction === 'SHORT');
+        return tradeData;
+    }
+
+    // Decode minute data (same as candlestick_viewer)
+    function ticksToUnixSeconds(ticksHi, ticksLo) {
+        const ticks = BigInt(ticksHi) * BigInt(0x100000000) + BigInt(ticksLo >>> 0);
+        return Number(ticks / 10000000n) + DOTNET_EPOCH_UNIX_SEC;
+    }
+
+    function decodeMinuteData(buffer) {
+        const view = new DataView(buffer);
+        const numRecords = Math.floor(buffer.byteLength / MINUTE_RECORD_SIZE);
+        const candles = [], volumes = [];
+        for (let i = 0; i < numRecords; i++) {
+            const offset = i * MINUTE_RECORD_SIZE;
+            const ticksLo = view.getUint32(offset, true);
+            const ticksHi = view.getUint32(offset + 4, true);
+            const time = ticksToUnixSeconds(ticksHi, ticksLo);
+            const high = view.getFloat64(offset + 8, true);
+            const low = view.getFloat64(offset + 16, true);
+            const open = view.getFloat64(offset + 24, true);
+            const close = view.getFloat64(offset + 32, true);
+            const volume = view.getUint32(offset + 48, true);
+            candles.push({ time, open, high, low, close });
+            volumes.push({ time, value: volume, color: close >= open ? 'rgba(38,166,154,0.4)' : 'rgba(239,83,80,0.4)' });
+        }
+        return { candles, volumes, numRecords };
+    }
+
+    document.getElementById('data-input').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            const { candles, volumes, numRecords } = decodeMinuteData(evt.target.result);
+            if (candles.length === 0) { info.textContent = 'No data.'; return; }
+            candleSeries.setData(candles);
+            volumeSeries.setData(volumes);
+            chart.timeScale().fitContent();
+            info.textContent = `${file.name} — ${numRecords} bars`;
+        };
+        reader.readAsArrayBuffer(file);
+    });
+
+    document.getElementById('trades-input').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            try {
+                const json = JSON.parse(evt.target.result);
+                tradeData = json.trades || [];
+                tradeData.forEach(t => {
+                    t.entry_time = t.entry_time - (t.entry_time % 60);
+                    t.exit_time = t.exit_time - (t.exit_time % 60);
+                });
+                renderStats();
+                renderTradeList();
+                renderEquityCurve();
+                chart.timeScale().fitContent();
+            } catch (err) {
+                info.textContent = 'Error: ' + err.message;
+            }
+        };
+        reader.readAsText(file);
+    });
+
+    function renderStats() {
+        const wins = tradeData.filter(t => t.result === 'WIN');
+        const losses = tradeData.filter(t => t.result !== 'WIN');
+        const totalPnl = tradeData.reduce((s, t) => s + t.pnl_points, 0);
+        const avgWin = wins.length ? (wins.reduce((s, t) => s + t.pnl_points, 0) / wins.length) : 0;
+        const avgLoss = losses.length ? (losses.reduce((s, t) => s + t.pnl_points, 0) / losses.length) : 0;
+        const pf = losses.length && avgLoss !== 0 ? Math.abs(avgWin * wins.length / (avgLoss * losses.length)) : 0;
+
+        document.getElementById('stats').innerHTML =
+            `Trades: ${tradeData.length} | <span class="win">W: ${wins.length}</span> / <span class="lose">L: ${losses.length}</span><br>` +
+            `Win Rate: ${(100 * wins.length / Math.max(tradeData.length, 1)).toFixed(1)}% | PF: ${pf.toFixed(2)}<br>` +
+            `Total: <span class="${totalPnl >= 0 ? 'win' : 'lose'}">${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)} pts</span> | ` +
+            `Avg W: <span class="win">+${avgWin.toFixed(2)}</span> / L: <span class="lose">${avgLoss.toFixed(2)}</span>`;
+    }
+
+    function renderTradeList() {
+        const list = document.getElementById('trade-list');
+        const filtered = getFilteredTrades();
+        list.innerHTML = '';
+        filtered.forEach((trade, idx) => {
+            const li = document.createElement('li');
+            li.className = trade.result === 'WIN' ? 'win' : 'loss';
+            const time = new Date(trade.entry_time * 1000).toISOString().slice(5, 16).replace('T', ' ');
+            li.innerHTML =
+                `<span class="dir" style="color:${trade.direction === 'LONG' ? '#3efe35' : '#ff1100'}">${trade.direction}</span>` +
+                `<span class="time">${time}</span>` +
+                `<span class="pnl" style="color:${trade.pnl_points >= 0 ? '#3efe35' : '#ff1100'}">${trade.pnl_points >= 0 ? '+' : ''}${trade.pnl_points.toFixed(2)}</span>`;
+            li.addEventListener('click', () => {
+                chart.timeScale().setVisibleRange({ from: trade.entry_time - 300, to: trade.exit_time + 300 });
+            });
+            list.appendChild(li);
+        });
+    }
+
+    function renderEquityCurve() {
+        let cumPnl = 0;
+        const eqData = tradeData.map(t => {
+            cumPnl += t.pnl_points;
+            return { time: t.exit_time, value: cumPnl };
+        });
+        equitySeries.setData(eqData);
+        equityChart.timeScale().fitContent();
+    }
+
+    // Filter buttons
+    document.getElementById('filter-bar').addEventListener('click', function(e) {
+        if (e.target.tagName !== 'BUTTON') return;
+        currentFilter = e.target.dataset.filter;
+        document.querySelectorAll('#filter-bar button').forEach(b => b.classList.remove('active'));
+        e.target.classList.add('active');
+        renderTradeList();
+        chart.timeScale().fitContent();
+    });
+
+    // Responsive resize
+    const ro = new ResizeObserver(() => {
+        chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
+        equityChart.applyOptions({ width: equityContainer.clientWidth, height: equityContainer.clientHeight });
+    });
+    ro.observe(chartContainer);
+    ro.observe(equityContainer);
+})();
+</script>
+</body>
+</html>

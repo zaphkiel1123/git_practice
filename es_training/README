@@ -1,0 +1,12 @@
+# Full pipeline (put your .data files in ./data/)
+./run_trading.sh ./data 1min 1.5
+
+# Or step by step:
+python3 train_trading_model.py ./data --rr 1.5
+python3 backtester.py ./data/models --rr 1.5
+python3 explain_model.py ./data/models --trades ./data/models/backtest_trades.csv
+python3 generate_trade_output.py ./data/models
+
+# Live signals:
+python3 live_signal.py ./data/models --file new_session.data
+python3 live_signal.py ./data/models --watch /path/to/live/
