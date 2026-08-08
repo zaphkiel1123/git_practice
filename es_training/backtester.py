@@ -231,7 +231,15 @@ class Backtester:
 def compute_metrics(trades):
     """Compute performance metrics from trade list."""
     if not trades:
-        return {'n_trades': 0}
+        return {
+            'n_trades': 0, 'win_rate': 0.0, 'profit_factor': 0.0,
+            'avg_winner_$': 0.0, 'avg_loser_$': 0.0, 'expectancy_$': 0.0,
+            'total_pnl_$': 0.0, 'total_pnl_pts': 0.0, 'max_drawdown_$': 0.0,
+            'sharpe_approx': 0.0, 'avg_bars_held': 0.0,
+            'n_longs': 0, 'n_shorts': 0,
+            'long_win_rate': 0.0, 'short_win_rate': 0.0,
+            'exit_reasons': {},
+        }
 
     pnls = np.array([t.pnl_dollars for t in trades])
     points = np.array([t.pnl_points for t in trades])

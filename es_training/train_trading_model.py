@@ -386,7 +386,7 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
                             max_hold_bars=max_hold_bars)
 
     if output_dir is None:
-        output_dir = data_dir
+        output_dir = os.path.join(_SCRIPT_DIR, 'data', 'models')
     os.makedirs(output_dir, exist_ok=True)
 
     feature_cols = get_feature_columns(bars)
@@ -582,7 +582,7 @@ def main():
     parser.add_argument('--rr', type=float, default=1.5, help='Minimum risk-reward ratio (default: 1.5)')
     parser.add_argument('--max-hold', type=int, default=60, help='Max bars to hold a trade (default: 60)')
     parser.add_argument('--folds', type=int, default=5, help='Walk-forward folds (default: 5)')
-    parser.add_argument('--output-dir', default=None, help='Output directory for models')
+    parser.add_argument('--output-dir', default=None, help='Output directory for models (default: ./data/models)')
 
     args = parser.parse_args()
 
