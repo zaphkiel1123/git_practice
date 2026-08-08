@@ -433,11 +433,11 @@ def main():
 
     trades_df = trades_to_dataframe(trades)
     trades_path = os.path.join(output_dir, 'backtest_trades.csv')
-    trades_df.to_csv(trades_path, index=False)
+    trades_df.to_csv(trades_path, index=False, date_format='%Y-%m-%d %H:%M:%S')
     print(f"\nTrades saved to: {trades_path}")
 
     equity_path = os.path.join(output_dir, 'equity_curve.csv')
-    equity_curve.to_csv(equity_path, index=False)
+    equity_curve.to_csv(equity_path, index=False, date_format='%Y-%m-%d %H:%M:%S')
     print(f"Equity curve saved to: {equity_path}")
 
     metrics_path = os.path.join(output_dir, 'backtest_metrics.json')

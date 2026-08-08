@@ -176,7 +176,7 @@ def get_feature_columns(df):
         'sl_points', 'tp_points', 'is_rth',
         'open', 'high', 'low', 'close',
         'direction_label', 'magnitude_label', 'future_return', 'future_close',
-        'atr_target', 'quality_label',
+        'atr_target', 'quality_label', 'has_trade_outcome',
     }
     return [c for c in df.columns if c not in exclude and not c.startswith('_')]
 
@@ -364,12 +364,10 @@ def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60):
     # ATR target for volatility model
     bars['atr_target'] = compute_atr(bars, period=5).shift(-5)
 
-    # Quality label: for rows where trade_label != 0, did that direction win?
-    bars['quality_label'] = 0
-    long_mask = bars['trade_label'] == 1
-    short_mask = bars['trade_label'] == -1
-    bars.loc[long_mask, 'quality_label'] = (bars.loc[long_mask, 'long_result'] == 1).astype(int)
-    bars.loc[short_mask, 'quality_label'] = (bars.loc[short_mask, 'short_result'] == 1).astype(int)
+    # Quality label: for bars with any definitive trade outcome (win or loss),
+    # mark 1 if at least one direction won, 0 if both lost/timed out.
+    bars['has_trade_outcome'] = ((bars['long_result'] != 0) | (bars['short_result'] != 0)).astype(int)
+    bars['quality_label'] = ((bars['long_result'] == 1) | (bars['short_result'] == 1)).astype(int)
 
     # Drop NaN rows from rolling features
     bars = bars.dropna()
@@ -462,8 +460,9 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
     print(f"  TRADE QUALITY MODEL (win probability filter)")
     print(f"{'='*60}")
 
-    # Only train on bars where a trade direction is indicated
-    trade_mask_rth = (y_signal[rth_indices] != 0)
+    # Train on all bars with a definitive trade outcome (win or loss, not just winners)
+    y_has_outcome = bars['has_trade_outcome'].values
+    trade_mask_rth = (y_has_outcome[rth_indices] != 0)
     trade_rth_indices = rth_indices[trade_mask_rth]
 
     if len(trade_rth_indices) > 200:
@@ -564,7 +563,7 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
         bars.to_parquet(features_path)
     except ImportError:
         features_path = features_path.replace('.parquet', '.csv')
-        bars.to_csv(features_path)
+        bars.to_csv(features_path, date_format='%Y-%m-%d %H:%M:%S')
     print(f"  Features → {features_path}")
 
     print(f"\n{'='*60}")
