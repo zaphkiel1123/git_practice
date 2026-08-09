@@ -8,6 +8,11 @@ with SL/TP management, enforces 1.5R minimum, RTH only, flat by 15:30 ET.
 Usage:
     python3 backtester.py /path/to/models/ --data /path/to/data/
     python3 backtester.py /path/to/models/ --features training_features.parquet
+	
+	# More selective (fewer but higher-quality trades)
+	python3 backtester.py ./data/models --signal-threshold 0.45
+	# Less selective (more trades)
+	python3 backtester.py ./data/models --signal-threshold 0.35
 """
 
 import argparse
@@ -50,7 +55,7 @@ class Trade:
 
 class Backtester:
     def __init__(self, signal_model, vol_model, quality_model, feature_cols,
-                 rr_ratio=1.5, signal_threshold=0.55, quality_threshold=0.50,
+                 rr_ratio=1.5, signal_threshold=0.40, quality_threshold=0.50,
                  max_hold_bars=60, sl_multiplier=1.5, min_sl=2.0, max_sl=8.0):
         self.signal_model = signal_model
         self.vol_model = vol_model
@@ -152,11 +157,14 @@ class Backtester:
                     # probs: [P(short), P(no_trade), P(long)] for mapped classes [0,1,2]
                     prob_long = probs[2] if len(probs) == 3 else probs[1]
                     prob_short = probs[0]
+                    prob_no_trade = probs[1] if len(probs) == 3 else 0.0
                     pred_direction = 0
 
-                    if prob_long > self.signal_threshold and prob_long > prob_short:
+                    # Pick the direction with highest probability, but only if it
+                    # exceeds the threshold AND beats the no-trade probability
+                    if prob_long > self.signal_threshold and prob_long > prob_short and prob_long > prob_no_trade:
                         pred_direction = 1
-                    elif prob_short > self.signal_threshold and prob_short > prob_long:
+                    elif prob_short > self.signal_threshold and prob_short > prob_long and prob_short > prob_no_trade:
                         pred_direction = -1
                 else:
                     pred = self.signal_model.predict(X)[0]
@@ -349,7 +357,7 @@ def main():
     parser.add_argument('--data', default=None, help='Directory with .data files (re-compute features)')
     parser.add_argument('--features', default=None, help='Pre-computed features file (parquet/csv)')
     parser.add_argument('--rr', type=float, default=1.5, help='Risk-reward ratio')
-    parser.add_argument('--signal-threshold', type=float, default=0.55, help='Signal confidence threshold')
+    parser.add_argument('--signal-threshold', type=float, default=0.40, help='Signal confidence threshold (default: 0.40 for 3-class model)')
     parser.add_argument('--quality-threshold', type=float, default=0.50, help='Quality filter threshold')
     parser.add_argument('--max-hold', type=int, default=60, help='Max bars to hold')
     parser.add_argument('--output', default=None, help='Output directory for results')
