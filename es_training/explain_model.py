@@ -32,10 +32,36 @@ except ImportError:
     HAS_SHAP = False
 
 
+def _normalize_shap_values(shap_values):
+    """Convert any SHAP output format to a consistent numpy array/list."""
+    if hasattr(shap_values, 'values'):
+        shap_values = shap_values.values
+    return shap_values
+
+
+def _mean_abs_importance(shap_values):
+    """Compute 1D mean absolute SHAP importance per feature."""
+    if isinstance(shap_values, list):
+        return np.mean([np.abs(sv).mean(axis=0) for sv in shap_values], axis=0)
+    elif shap_values.ndim == 3:
+        return np.abs(shap_values).mean(axis=(0, 2))
+    else:
+        return np.abs(shap_values).mean(axis=0)
+
+
+def _get_class_shap(shap_values, class_idx=-1):
+    """Extract SHAP values for a specific class from multiclass output."""
+    if isinstance(shap_values, list):
+        return shap_values[class_idx]
+    elif shap_values.ndim == 3:
+        return shap_values[:, :, class_idx]
+    else:
+        return shap_values
+
+
 def explain_global(model, X, feature_names, model_name='model', top_n=20):
     """Compute global SHAP feature importance."""
     if not HAS_SHAP:
-        # Fallback to built-in feature importance
         imp = model.feature_importances_
         idx = np.argsort(imp)[::-1][:top_n]
         return {
@@ -43,7 +69,7 @@ def explain_global(model, X, feature_names, model_name='model', top_n=20):
             'features': [
                 {
                     'rank': rank,
-                    'name': feature_names[i],
+                    'name': feature_names[int(i)],
                     'importance': float(imp[i]),
                     'mean_abs_shap': float(imp[i]),
                     'effect': 'importance-based (SHAP unavailable)',
@@ -52,32 +78,21 @@ def explain_global(model, X, feature_names, model_name='model', top_n=20):
             ],
         }
 
-    # Use TreeExplainer for LightGBM/XGBoost (fast)
     explainer = shap.TreeExplainer(model)
 
-    # Sample if dataset is large
     sample_size = min(2000, len(X))
     if len(X) > sample_size:
-        idx = np.random.choice(len(X), sample_size, replace=False)
-        X_sample = X[idx]
+        sample_idx = np.random.choice(len(X), sample_size, replace=False)
+        X_sample = X[sample_idx]
     else:
         X_sample = X
 
-    shap_values = explainer.shap_values(X_sample)
-
-    # Handle SHAP Explanation object (newer SHAP versions)
-    if hasattr(shap_values, 'values'):
-        shap_values = shap_values.values
-
-    # For multiclass, shap_values can be a list of 2D arrays or a single 3D array
-    if isinstance(shap_values, list):
-        mean_abs = np.mean([np.abs(sv).mean(axis=0) for sv in shap_values], axis=0)
-    elif shap_values.ndim == 3:
-        mean_abs = np.abs(shap_values).mean(axis=(0, 2))
-    else:
-        mean_abs = np.abs(shap_values).mean(axis=0)
-
+    shap_values = _normalize_shap_values(explainer.shap_values(X_sample))
+    mean_abs = _mean_abs_importance(shap_values)
     idx = np.argsort(mean_abs)[::-1][:top_n]
+
+    # Get SHAP values for the "long" class to determine direction of influence
+    sv_long = _get_class_shap(shap_values, class_idx=-1)
 
     result = {
         'method': 'SHAP_TreeExplainer',
@@ -94,17 +109,8 @@ def explain_global(model, X, feature_names, model_name='model', top_n=20):
             'mean_abs_shap': float(mean_abs[i]),
         }
 
-        # Determine direction of influence — use the "long" class SHAP values
-        if isinstance(shap_values, list):
-            sv = shap_values[-1] if len(shap_values) > 2 else shap_values[1]
-        elif shap_values.ndim == 3:
-            sv = shap_values[:, :, -1] if shap_values.shape[2] > 2 else shap_values[:, :, 1]
-        else:
-            sv = shap_values
-
         feature_vals = X_sample[:, i]
-        shap_vals = sv[:, i]
-        # Correlation between feature value and SHAP value indicates direction
+        shap_vals = sv_long[:, i]
         if len(feature_vals) > 10:
             corr = np.corrcoef(feature_vals, shap_vals)[0, 1]
             feature_info['direction_correlation'] = float(corr)
@@ -126,16 +132,10 @@ def explain_trades(model, X_trades, feature_names, trade_results, top_n=5):
         return {'method': 'unavailable', 'note': 'Install shap package for per-trade explanations'}
 
     explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X_trades)
+    shap_values = _normalize_shap_values(explainer.shap_values(X_trades))
 
-    # For multiclass, pick the class that was predicted
-    if isinstance(shap_values, list):
-        # Use the SHAP values for the predicted class
-        sv_long = shap_values[-1] if len(shap_values) > 2 else shap_values[1]
-        sv_short = shap_values[0]
-    else:
-        sv_long = shap_values
-        sv_short = -shap_values
+    sv_long = _get_class_shap(shap_values, class_idx=-1)
+    sv_short = _get_class_shap(shap_values, class_idx=0)
 
     explanations = []
     for i in range(min(len(X_trades), 50)):
@@ -145,6 +145,7 @@ def explain_trades(model, X_trades, feature_names, trade_results, top_n=5):
         top_idx = np.argsort(np.abs(sv))[::-1][:top_n]
         factors = []
         for j in top_idx:
+            j = int(j)
             factors.append({
                 'feature': feature_names[j],
                 'shap_value': float(sv[j]),
@@ -174,30 +175,26 @@ def compare_winners_losers(model, X_all, feature_names, pnl_array, top_n=15):
 
     explainer = shap.TreeExplainer(model)
 
-    # Sample winners and losers
-    n_sample = min(500, winners_mask.sum(), losers_mask.sum())
+    n_sample = min(500, int(winners_mask.sum()), int(losers_mask.sum()))
     win_idx = np.random.choice(np.where(winners_mask)[0], n_sample, replace=False)
     lose_idx = np.random.choice(np.where(losers_mask)[0], n_sample, replace=False)
 
-    sv_win = explainer.shap_values(X_all[win_idx])
-    sv_lose = explainer.shap_values(X_all[lose_idx])
+    sv_win = _normalize_shap_values(explainer.shap_values(X_all[win_idx]))
+    sv_lose = _normalize_shap_values(explainer.shap_values(X_all[lose_idx]))
 
-    if isinstance(sv_win, list):
-        sv_win = np.mean([np.abs(sv) for sv in sv_win], axis=0)
-        sv_lose = np.mean([np.abs(sv) for sv in sv_lose], axis=0)
-    else:
-        sv_win = np.abs(sv_win)
-        sv_lose = np.abs(sv_lose)
+    mean_win = _mean_abs_importance(sv_win)
+    mean_lose = _mean_abs_importance(sv_lose)
 
-    mean_win = sv_win.mean(axis=0)
-    mean_lose = sv_lose.mean(axis=0)
+    # Ensure 1D (should be after _mean_abs_importance, but guard against edge cases)
+    mean_win = np.asarray(mean_win).ravel()
+    mean_lose = np.asarray(mean_lose).ravel()
 
-    # Features that differentiate winners from losers
     diff = mean_win - mean_lose
     diff_idx = np.argsort(np.abs(diff))[::-1][:top_n]
 
     comparison = []
     for i in diff_idx:
+        i = int(i)
         comparison.append({
             'feature': feature_names[i],
             'winner_importance': float(mean_win[i]),
@@ -224,7 +221,7 @@ def generate_report(global_explanation, comparison=None):
         lines.append(f"    {f['rank']:2d}. {f['name']:<30} (importance: {f['mean_abs_shap']:.4f})")
         lines.append(f"        → {effect}")
 
-    if comparison:
+    if comparison and isinstance(comparison, list):
         lines.append("\n\n  FACTORS THAT DISTINGUISH WINNERS FROM LOSERS:")
         lines.append("  " + "-" * 50)
         for c in comparison[:10]:
