@@ -65,9 +65,15 @@ def explain_global(model, X, feature_names, model_name='model', top_n=20):
 
     shap_values = explainer.shap_values(X_sample)
 
-    # For multiclass, shap_values is a list; take mean abs across classes
+    # Handle SHAP Explanation object (newer SHAP versions)
+    if hasattr(shap_values, 'values'):
+        shap_values = shap_values.values
+
+    # For multiclass, shap_values can be a list of 2D arrays or a single 3D array
     if isinstance(shap_values, list):
         mean_abs = np.mean([np.abs(sv).mean(axis=0) for sv in shap_values], axis=0)
+    elif shap_values.ndim == 3:
+        mean_abs = np.abs(shap_values).mean(axis=(0, 2))
     else:
         mean_abs = np.abs(shap_values).mean(axis=0)
 
@@ -80,17 +86,19 @@ def explain_global(model, X, feature_names, model_name='model', top_n=20):
         'features': []
     }
 
-    for i in idx:
+    for rank, i in enumerate(idx, 1):
+        i = int(i)
         feature_info = {
-            'rank': int(np.where(idx == i)[0][0] + 1),
+            'rank': rank,
             'name': feature_names[i],
             'mean_abs_shap': float(mean_abs[i]),
         }
 
-        # Determine direction of influence
+        # Determine direction of influence — use the "long" class SHAP values
         if isinstance(shap_values, list):
-            # For long class (class index 2 in mapped labels)
             sv = shap_values[-1] if len(shap_values) > 2 else shap_values[1]
+        elif shap_values.ndim == 3:
+            sv = shap_values[:, :, -1] if shap_values.shape[2] > 2 else shap_values[:, :, 1]
         else:
             sv = shap_values
 
