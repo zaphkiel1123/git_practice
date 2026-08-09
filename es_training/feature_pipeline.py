@@ -301,18 +301,21 @@ def add_rolling_features(bars, lookback_windows=[3, 5, 10]):
 
 
 def add_time_features(bars):
-    """Add time-of-day cyclical encoding and session indicators."""
-    ts = bars.index
+    """Add time-of-day cyclical encoding and session indicators.
+    Timestamps are in US Central (CME/Chicago) time."""
+    # Convert to Eastern for session logic
+    ts_et = bars.index.tz_localize('America/Chicago').tz_convert('America/New_York')
 
-    # Cyclical hour encoding
-    hour_frac = ts.hour + ts.minute / 60.0
+    # Cyclical hour encoding (ET)
+    hour_frac = ts_et.hour + ts_et.minute / 60.0
     bars['hour_sin'] = np.sin(2 * np.pi * hour_frac / 24)
     bars['hour_cos'] = np.cos(2 * np.pi * hour_frac / 24)
 
-    # Session indicators (approximate for common trading sessions)
-    bars['session_asia'] = ((ts.hour >= 1) & (ts.hour < 9)).astype(int)
-    bars['session_europe'] = ((ts.hour >= 9) & (ts.hour < 16)).astype(int)
-    bars['session_us'] = ((ts.hour >= 16) | (ts.hour < 1)).astype(int)
+    # Session indicators based on ET hours
+    bars['session_overnight'] = ((ts_et.hour >= 18) | (ts_et.hour < 4)).astype(int)
+    bars['session_premarket'] = ((ts_et.hour >= 4) & (ts_et.hour < 9)).astype(int)
+    bars['session_rth'] = (((ts_et.hour * 100 + ts_et.minute) >= 930) &
+                           ((ts_et.hour * 100 + ts_et.minute) < 1600)).astype(int)
 
     return bars
 
