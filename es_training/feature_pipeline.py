@@ -151,10 +151,109 @@ def compute_window_features(df, window='1min'):
     bars['max_buy_run'] = resampled['direction'].apply(_max_consecutive, target=1)
     bars['max_sell_run'] = resampled['direction'].apply(_max_consecutive, target=-1)
 
+    # Per-level imbalance features (3:1 ratio = imbalance per footprint convention)
+    imb_features = _compute_all_imbalance_features(df, window)
+    for col in imb_features.columns:
+        bars[col] = imb_features[col]
+    bars['net_imbalance'] = bars['buy_imbalance_count'] - bars['sell_imbalance_count']
+
+    # Transaction speed features
+    bars['max_events_per_tick'] = resampled['price'].apply(lambda s: s.value_counts().max() if len(s) > 0 else 0)
+    total_vol_by_level = resampled.apply(lambda g: g.groupby('price')['txn_count'].sum().max() / g['txn_count'].sum() if len(g) > 0 and g['txn_count'].sum() > 0 else 0)
+    bars['level_concentration'] = total_vol_by_level
+
     # Drop windows with no data
     bars = bars.dropna(subset=['open'])
 
     return bars
+
+
+TICK_SIZE_FP = 0.25
+
+
+def _compute_all_imbalance_features(df, window):
+    """Compute per-bar imbalance features by iterating over resampled groups."""
+    records = []
+    for ts, group in df.resample(window):
+        if len(group) == 0:
+            continue
+        levels = _compute_level_buysell(group)
+        records.append({
+            'timestamp': ts,
+            'buy_imbalance_count': _count_buy_imb(levels),
+            'sell_imbalance_count': _count_sell_imb(levels),
+            'buy_imbalance_cluster': _max_buy_cluster(levels),
+            'sell_imbalance_cluster': _max_sell_cluster(levels),
+        })
+    result = pd.DataFrame(records).set_index('timestamp')
+    return result
+
+
+def _compute_level_buysell(group):
+    """Build dict of {price: [buy_vol, sell_vol]} for a bar's ticks."""
+    levels = {}
+    for _, row in group.iterrows():
+        p = row['price']
+        vol = row['txn_count']
+        if p not in levels:
+            levels[p] = [0, 0]
+        if row['direction'] == 1:
+            levels[p][0] += vol
+        elif row['direction'] == -1:
+            levels[p][1] += vol
+    return levels
+
+
+def _count_buy_imb(levels):
+    """Count price levels with buy_at_P >= 3 * sell_at_(P - tick)."""
+    count = 0
+    for p, (buy, sell) in levels.items():
+        below = levels.get(p - TICK_SIZE_FP)
+        if below and below[1] > 0 and buy >= 3 * below[1]:
+            count += 1
+    return count
+
+
+def _count_sell_imb(levels):
+    """Count price levels with sell_at_P >= 3 * buy_at_(P + tick)."""
+    count = 0
+    for p, (buy, sell) in levels.items():
+        above = levels.get(p + TICK_SIZE_FP)
+        if above and above[0] > 0 and sell >= 3 * above[0]:
+            count += 1
+    return count
+
+
+def _max_buy_cluster(levels):
+    """Longest consecutive stack of buy imbalances (prices ascending)."""
+    prices = sorted(levels.keys())
+    max_cluster = 0
+    current = 0
+    for p in prices:
+        buy = levels[p][0]
+        below = levels.get(p - TICK_SIZE_FP)
+        if below and below[1] > 0 and buy >= 3 * below[1]:
+            current += 1
+            max_cluster = max(max_cluster, current)
+        else:
+            current = 0
+    return max_cluster
+
+
+def _max_sell_cluster(levels):
+    """Longest consecutive stack of sell imbalances (prices descending)."""
+    prices = sorted(levels.keys(), reverse=True)
+    max_cluster = 0
+    current = 0
+    for p in prices:
+        sell = levels[p][1]
+        above = levels.get(p + TICK_SIZE_FP)
+        if above and above[0] > 0 and sell >= 3 * above[0]:
+            current += 1
+            max_cluster = max(max_cluster, current)
+        else:
+            current = 0
+    return max_cluster
 
 
 def _max_consecutive(series, target):
@@ -177,15 +276,13 @@ def add_rolling_features(bars, lookback_windows=[3, 5, 10]):
     """
     Add rolling/momentum/volatility features computed from prior bars.
     All features are strictly backward-looking (no data leakage).
+    Uses mid-price (high+low)/2 instead of close as representative price.
     """
-    # Returns
-    bars['return_1'] = bars['close'].pct_change()
+    bars['mid'] = (bars['high'] + bars['low']) / 2
+    bars['return_1'] = bars['mid'].pct_change()
 
     for w in lookback_windows:
         prefix = f'roll_{w}'
-
-        # Momentum: return over last w bars
-        bars[f'{prefix}_momentum'] = bars['close'].pct_change(w)
 
         # Volatility: rolling std of 1-bar returns
         bars[f'{prefix}_volatility'] = bars['return_1'].rolling(w).std()

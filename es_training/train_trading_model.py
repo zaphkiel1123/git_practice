@@ -53,21 +53,41 @@ TICK_SIZE = 0.25
 # ============================================================
 
 def add_microstructure_features(bars, raw_df=None):
-    """Add order-flow microstructure features beyond basic pipeline."""
+    """Add order-flow microstructure features. No MAs or close-price features."""
 
-    # Delta (net buy-sell volume per bar) — already have flow_imbalance, add raw delta
+    # Delta (net buy-sell volume per bar)
     bars['delta'] = bars['buy_volume'] - bars['sell_volume']
 
-    # Delta divergence: price direction vs delta direction
-    bars['price_direction'] = np.sign(bars['close'] - bars['open'])
+    # Delta divergence: bar direction (high+low midpoint vs open) vs delta direction
+    bars['mid'] = (bars['high'] + bars['low']) / 2
+    bars['bar_direction'] = np.sign(bars['mid'] - bars['open'])
     bars['delta_direction'] = np.sign(bars['delta'])
-    bars['delta_divergence'] = (bars['price_direction'] != bars['delta_direction']).astype(int)
+    bars['delta_divergence'] = (bars['bar_direction'] != bars['delta_direction']).astype(int)
 
-    # CVD (cumulative volume delta) and its slope
+    # CVD (cumulative volume delta) and its derivatives
     bars['cvd'] = bars['delta'].cumsum()
     bars['cvd_slope_3'] = bars['cvd'].diff(3) / 3
     bars['cvd_slope_5'] = bars['cvd'].diff(5) / 5
     bars['cvd_slope_10'] = bars['cvd'].diff(10) / 10
+    bars['cvd_accel'] = bars['cvd_slope_3'].diff()
+    bars['cvd_accel_5'] = bars['cvd_slope_5'].diff()
+
+    # CVD divergence from price: price making new highs but CVD not, or vice versa
+    bars['high_5'] = bars['high'].rolling(5).max()
+    bars['cvd_5_max'] = bars['cvd'].rolling(5).max()
+    bars['cvd_bull_div'] = ((bars['high'] >= bars['high_5']) &
+                            (bars['cvd'] < bars['cvd_5_max'])).astype(int)
+    bars['low_5'] = bars['low'].rolling(5).min()
+    bars['cvd_5_min'] = bars['cvd'].rolling(5).min()
+    bars['cvd_bear_div'] = ((bars['low'] <= bars['low_5']) &
+                            (bars['cvd'] > bars['cvd_5_min'])).astype(int)
+
+    # Delta as percent of total volume (normalized)
+    bars['delta_pct'] = bars['delta'] / bars['volume'].clip(lower=1)
+
+    # Cumulative delta rate of change
+    bars['cvd_roc_3'] = bars['cvd'].diff(3) / bars['cvd'].shift(3).abs().clip(lower=1)
+    bars['cvd_roc_10'] = bars['cvd'].diff(10) / bars['cvd'].shift(10).abs().clip(lower=1)
 
     # Absorption: high volume but small price movement
     bars['bar_range'] = bars['high'] - bars['low']
@@ -86,23 +106,6 @@ def add_microstructure_features(bars, raw_df=None):
     # Range relative to ATR (expansion/contraction)
     bars['range_vs_atr'] = bars['bar_range'] / bars['atr_14'].clip(lower=TICK_SIZE)
 
-    # Close position within bar range (0=low, 1=high)
-    bars['close_position'] = (bars['close'] - bars['low']) / bars['bar_range'].clip(lower=TICK_SIZE)
-
-    # Momentum features
-    bars['roc_3'] = bars['close'].pct_change(3)
-    bars['roc_5'] = bars['close'].pct_change(5)
-    bars['roc_10'] = bars['close'].pct_change(10)
-
-    # Price distance from VWAP
-    if 'vwap' in bars.columns:
-        bars['vwap_distance'] = (bars['close'] - bars['vwap']) / bars['atr_14'].clip(lower=TICK_SIZE)
-
-    # Swing high/low detection (simplified)
-    bars['swing_high_dist'] = bars['high'].rolling(20).max() - bars['close']
-    bars['swing_low_dist'] = bars['close'] - bars['low'].rolling(20).min()
-    bars['swing_range_pct'] = bars['swing_low_dist'] / (bars['swing_high_dist'] + bars['swing_low_dist']).clip(lower=TICK_SIZE)
-
     # Consolidation detection (narrowing range)
     bars['range_ma_5'] = bars['bar_range'].rolling(5).mean()
     bars['range_ma_20'] = bars['bar_range'].rolling(20).mean()
@@ -116,30 +119,58 @@ def add_microstructure_features(bars, raw_df=None):
     bars['vol_ma_20'] = bars['volume'].rolling(20).mean()
     bars['vol_surge'] = bars['volume'] / bars['vol_ma_20'].clip(lower=1)
 
-    # Multi-timeframe context (5-bar = ~5min if 1min bars)
-    bars['close_5bar_ma'] = bars['close'].rolling(5).mean()
-    bars['close_10bar_ma'] = bars['close'].rolling(10).mean()
-    bars['close_20bar_ma'] = bars['close'].rolling(20).mean()
-    bars['ma_cross_5_20'] = (bars['close_5bar_ma'] - bars['close_20bar_ma']) / bars['atr_14'].clip(lower=TICK_SIZE)
+    # Transaction speed: intensity acceleration
+    bars['intensity_accel'] = bars['intensity'].diff()
+    bars['intensity_accel_3'] = bars['intensity'].diff(3)
+    bars['intensity_surge'] = bars['intensity'] / bars['intensity'].rolling(10, min_periods=1).mean()
 
-    # Gap from previous bar close to current open
-    bars['gap'] = bars['open'] - bars['close'].shift(1)
-    bars['gap_atr'] = bars['gap'] / bars['atr_14'].clip(lower=TICK_SIZE)
+    # Delta momentum: consecutive bars with same delta sign
+    bars['delta_sign'] = np.sign(bars['delta'])
+    bars['delta_streak'] = _compute_streak(bars['delta_sign'].values)
+
+    # Buy/sell pressure ratio over rolling windows
+    bars['pressure_ratio_5'] = (bars['buy_volume'].rolling(5).sum() /
+                                bars['sell_volume'].rolling(5).sum().clip(lower=1))
+    bars['pressure_ratio_10'] = (bars['buy_volume'].rolling(10).sum() /
+                                 bars['sell_volume'].rolling(10).sum().clip(lower=1))
+
+    # Imbalance cluster rolling features
+    if 'buy_imbalance_cluster' in bars.columns:
+        bars['imbalance_cluster_net'] = bars['buy_imbalance_cluster'] - bars['sell_imbalance_cluster']
+        bars['imbalance_cluster_3'] = bars['imbalance_cluster_net'].rolling(3).sum()
+        bars['imbalance_cluster_5'] = bars['imbalance_cluster_net'].rolling(5).sum()
+        bars['imbalance_strength'] = (bars['buy_imbalance_count'] - bars['sell_imbalance_count']).rolling(5).sum()
+
+    # Gap from previous bar (open vs previous high/low, not close)
+    bars['gap_from_prev_high'] = bars['open'] - bars['high'].shift(1)
+    bars['gap_from_prev_low'] = bars['open'] - bars['low'].shift(1)
 
     return bars
 
 
+def _compute_streak(signs):
+    """Compute streak length of consecutive same-sign values."""
+    streak = np.zeros(len(signs), dtype=np.int32)
+    for i in range(1, len(signs)):
+        if signs[i] == signs[i-1] and signs[i] != 0:
+            streak[i] = streak[i-1] + 1
+        elif signs[i] != 0:
+            streak[i] = 1
+    return streak
+
+
 def add_multi_timeframe_features(bars):
-    """Add features from higher timeframe aggregation (5-bar, 15-bar)."""
+    """Add features from higher timeframe aggregation (5-bar, 15-bar). Order-flow focused."""
     for tf in [5, 15]:
         prefix = f'tf{tf}'
-        bars[f'{prefix}_high'] = bars['high'].rolling(tf).max()
-        bars[f'{prefix}_low'] = bars['low'].rolling(tf).min()
-        bars[f'{prefix}_range'] = bars[f'{prefix}_high'] - bars[f'{prefix}_low']
-        bars[f'{prefix}_close_pos'] = (bars['close'] - bars[f'{prefix}_low']) / bars[f'{prefix}_range'].clip(lower=TICK_SIZE)
+        bars[f'{prefix}_range'] = bars['high'].rolling(tf).max() - bars['low'].rolling(tf).min()
         bars[f'{prefix}_delta_sum'] = bars['delta'].rolling(tf).sum()
         bars[f'{prefix}_vol_sum'] = bars['volume'].rolling(tf).sum()
         bars[f'{prefix}_imbalance'] = bars['flow_imbalance'].rolling(tf).mean()
+        bars[f'{prefix}_absorption'] = bars['absorption'].rolling(tf).mean()
+        bars[f'{prefix}_intensity'] = bars['intensity'].rolling(tf).mean()
+        if 'buy_imbalance_count' in bars.columns:
+            bars[f'{prefix}_imb_cluster_sum'] = bars['imbalance_cluster_net'].rolling(tf).sum()
     return bars
 
 
@@ -174,9 +205,10 @@ def get_feature_columns(df):
         'long_bars_held', 'short_bars_held',
         'long_mae', 'short_mae', 'long_mfe', 'short_mfe',
         'sl_points', 'tp_points', 'is_rth',
-        'open', 'high', 'low', 'close',
+        'open', 'high', 'low', 'close', 'mid', 'vwap',
         'direction_label', 'magnitude_label', 'future_return', 'future_close',
         'atr_target', 'quality_label', 'has_trade_outcome',
+        'high_5', 'low_5', 'cvd_5_max', 'cvd_5_min',
     }
     return [c for c in df.columns if c not in exclude and not c.startswith('_')]
 
