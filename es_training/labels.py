@@ -48,14 +48,15 @@ def compute_dynamic_sl(bars, atr_period=14, atr_multiplier=1.5, min_sl=2.0, max_
 def is_rth(timestamps, tz='America/New_York'):
     """Return boolean mask for Regular Trading Hours (9:30-15:30 ET)."""
     if timestamps.tz is None:
-        ts = timestamps.tz_localize('UTC').tz_convert(tz)
+        # Raw timestamps from CME data are in US Central (Chicago) time
+        ts = timestamps.tz_localize('America/Chicago').tz_convert(tz)
     else:
         ts = timestamps.tz_convert(tz)
     hour_min = ts.hour * 100 + ts.minute
     return (hour_min >= 930) & (hour_min < 1530)
 
 
-def simulate_trade_outcomes(bars, sl_points, rr_ratio=1.5, max_hold_bars=60):
+def simulate_trade_outcomes(bars, sl_points, rr_ratio=1.5, max_hold_bars=60, min_tp_ticks=20):
     """
     For each bar, simulate a LONG and SHORT entry at close price.
     Check subsequent bars to see if TP or SL is hit first.
@@ -85,7 +86,8 @@ def simulate_trade_outcomes(bars, sl_points, rr_ratio=1.5, max_hold_bars=60):
     short_mfe = np.zeros(n, dtype=np.float32)
 
     sl_arr = sl_points.values if hasattr(sl_points, 'values') else sl_points
-    tp_arr = sl_arr * rr_ratio
+    min_tp_points = min_tp_ticks * TICK_SIZE
+    tp_arr = np.maximum(sl_arr * rr_ratio, min_tp_points)
 
     for i in range(n - 1):
         entry = closes[i]
@@ -157,7 +159,7 @@ def simulate_trade_outcomes(bars, sl_points, rr_ratio=1.5, max_hold_bars=60):
 
 
 def create_trade_labels(bars, atr_period=14, atr_multiplier=1.5,
-                        rr_ratio=1.5, max_hold_bars=60):
+                        rr_ratio=1.5, max_hold_bars=60, min_tp_ticks=20):
     """
     Main entry point: compute dynamic SL and simulate trade outcomes.
     Returns the bars DataFrame augmented with trade labels.
@@ -165,11 +167,13 @@ def create_trade_labels(bars, atr_period=14, atr_multiplier=1.5,
     sl_points = compute_dynamic_sl(bars, atr_period=atr_period,
                                    atr_multiplier=atr_multiplier)
     outcomes = simulate_trade_outcomes(bars, sl_points, rr_ratio=rr_ratio,
-                                       max_hold_bars=max_hold_bars)
+                                       max_hold_bars=max_hold_bars,
+                                       min_tp_ticks=min_tp_ticks)
 
     bars = bars.copy()
     bars['sl_points'] = sl_points
-    bars['tp_points'] = sl_points * rr_ratio
+    min_tp_points = min_tp_ticks * TICK_SIZE
+    bars['tp_points'] = np.maximum(sl_points * rr_ratio, min_tp_points)
 
     # Primary label: best direction (which side wins?)
     # +1 if long wins, -1 if short wins, 0 if both timeout/lose
