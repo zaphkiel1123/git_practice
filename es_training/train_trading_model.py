@@ -14,8 +14,12 @@ Usage:
     python3 train_trading_model.py /path/to/data/ --window 1min --rr 2.0 --folds 7
 """
 
-import argparse
 import os
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+
+import argparse
 import sys
 import json
 import time

@@ -7,6 +7,10 @@ Provides dynamic SL sizing based on ATR and recent volatility.
 """
 
 import os
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+
 import numpy as np
 import pandas as pd
 from concurrent.futures import ProcessPoolExecutor

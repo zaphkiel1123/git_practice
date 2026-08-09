@@ -11,8 +11,12 @@ Usage:
     python3 feature_pipeline.py /path/to/data/dir --window 1min --horizon 5min --output features.csv
 """
 
-import struct
 import os
+os.environ.setdefault('OPENBLAS_NUM_THREADS', '1')
+os.environ.setdefault('MKL_NUM_THREADS', '1')
+os.environ.setdefault('OMP_NUM_THREADS', '1')
+
+import struct
 import sys
 import argparse
 import glob
