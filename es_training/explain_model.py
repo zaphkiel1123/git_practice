@@ -40,7 +40,16 @@ def explain_global(model, X, feature_names, model_name='model', top_n=20):
         idx = np.argsort(imp)[::-1][:top_n]
         return {
             'method': 'built-in',
-            'features': [{'name': feature_names[i], 'importance': float(imp[i])} for i in idx]
+            'features': [
+                {
+                    'rank': rank,
+                    'name': feature_names[i],
+                    'importance': float(imp[i]),
+                    'mean_abs_shap': float(imp[i]),
+                    'effect': 'importance-based (SHAP unavailable)',
+                }
+                for rank, i in enumerate(idx, 1)
+            ],
         }
 
     # Use TreeExplainer for LightGBM/XGBoost (fast)
