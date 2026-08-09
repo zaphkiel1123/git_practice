@@ -68,6 +68,7 @@
         upColor: 'transparent', downColor: 'transparent',
         borderUpColor: 'transparent', borderDownColor: 'transparent',
         wickUpColor: 'transparent', wickDownColor: 'transparent',
+        priceFormat: { type: 'price', precision: 2, minMove: 0.25 },
     });
     const volumeSeriesL = chartL.addSeries(LightweightCharts.HistogramSeries, {
         priceFormat: { type: 'volume' }, priceScaleId: 'volume',
@@ -80,6 +81,7 @@
         upColor: '#3efe35', downColor: '#ff1100',
         borderUpColor: '#3efe35', borderDownColor: '#ff1100',
         wickUpColor: '#3efe35', wickDownColor: '#ff1100',
+        priceFormat: { type: 'price', precision: 2, minMove: 0.25 },
     });
     const cvdSeries = chartR.addSeries(LightweightCharts.CandlestickSeries, {
         upColor: '#26a69a', downColor: '#9c27b0',
@@ -297,6 +299,16 @@
         return unixSec - (unixSec % 60);
     }
 
+    // 18:00 ET = 23:00 UTC (EST) or 22:00 UTC (EDT). Use 23:00 UTC as session reset.
+    const SESSION_RESET_UTC_HOUR = 23;
+    function isSessionReset(unixSec, prevUnixSec) {
+        if (prevUnixSec === null) return false;
+        const prevHour = Math.floor((prevUnixSec % 86400) / 3600);
+        const curHour = Math.floor((unixSec % 86400) / 3600);
+        return (prevHour < SESSION_RESET_UTC_HOUR && curHour >= SESSION_RESET_UTC_HOUR) ||
+               (curHour < prevHour); // day boundary wrap
+    }
+
     // --- Decode 57-byte tick records into minute bars with footprint + CVD ---
     function decodeTickData(buffer) {
         const view = new DataView(buffer);
@@ -345,8 +357,12 @@
         footprintData = new Map();
 
         let cumDelta = 0;
+        let prevTime = null;
 
         for (const time of times) {
+            // Reset CVD at session boundary (18:00 ET / 23:00 UTC)
+            if (isSessionReset(time, prevTime)) cumDelta = 0;
+
             const bar = barMap.get(time);
             candles.push({ time, open: bar.open, high: bar.high, low: bar.low, close: bar.close });
             volumes.push({
@@ -366,6 +382,7 @@
             }
             const cvdClose = cumDelta;
             cvdCandles.push({ time, open: cvdOpen, high: cvdHigh, low: cvdLow, close: cvdClose });
+            prevTime = time;
         }
 
         return { candles, volumes, cvdCandles, numRecords };
@@ -381,6 +398,7 @@
         footprintData = new Map();
 
         let cumDelta = 0;
+        let prevTime = null;
 
         for (let i = 0; i < numRecords; i++) {
             const offset = i * MINUTE_RECORD_SIZE;
@@ -388,6 +406,9 @@
             const ticksLo = view.getUint32(offset, true);
             const ticksHi = view.getUint32(offset + 4, true);
             const time = ticksToUnixSeconds(ticksHi, ticksLo);
+
+            // Reset CVD at session boundary (18:00 ET / 23:00 UTC)
+            if (isSessionReset(time, prevTime)) cumDelta = 0;
 
             const high  = view.getFloat64(offset + 8, true);
             const low   = view.getFloat64(offset + 16, true);
@@ -420,6 +441,7 @@
                 low: Math.min(cvdOpen, cvdClose),
                 close: cvdClose,
             });
+            prevTime = time;
         }
 
         return { candles, volumes, cvdCandles, numRecords };
