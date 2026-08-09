@@ -24,7 +24,10 @@ import pandas as pd
 
 DOTNET_EPOCH = datetime(1, 1, 1)
 MINUTE_RECORD_SIZE = 60
-MINUTE_STRUCT = struct.Struct('<q4d3I')  # timestamp(8) + OHLC(32) + sellCount(4) + buyCount(4) + volume(4) = 60 fake but matches
+# timestamp(8) + OHLC(32) + sellCount(4) + buyCount(4) + volume(4) + 8 trailing
+# bytes the viewer does not read but does include in its record stride.
+MINUTE_STRUCT = struct.Struct('<q4d3I8x')
+assert MINUTE_STRUCT.size == MINUTE_RECORD_SIZE
 
 
 def datetime_to_ticks(dt):
@@ -51,6 +54,7 @@ def bars_to_binary(bars, output_path):
         uint32  sell_count
         uint32  buy_count
         uint32  volume
+        byte[8] padding
     """
     with open(output_path, 'wb') as f:
         for i in range(len(bars)):
@@ -159,7 +163,7 @@ def main():
 
     # Load and convert trades
     trades_path = args.trades or os.path.join(args.models_dir, 'backtest_trades.csv')
-    if os.path.isfile(trades_path):
+    if os.path.isfile(trades_path) and os.path.getsize(trades_path) > 0:
         print("Generating trades.json...")
         trades_df = pd.read_csv(trades_path)
         json_path = os.path.join(output_dir, 'trades.json')
