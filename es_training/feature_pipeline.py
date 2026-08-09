@@ -18,7 +18,7 @@ import argparse
 import glob
 import time
 from datetime import datetime, timedelta
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -153,16 +153,11 @@ def compute_window_features(df, window='1min'):
     bars['max_buy_run'] = resampled['direction'].apply(_max_consecutive, target=1)
     bars['max_sell_run'] = resampled['direction'].apply(_max_consecutive, target=-1)
 
-    # Per-level imbalance features (3:1 ratio = imbalance per footprint convention)
-    imb_features = _compute_all_imbalance_features(df, window)
-    for col in imb_features.columns:
-        bars[col] = imb_features[col]
+    # Per-level imbalance, transaction speed features (computed in parallel chunks)
+    extra_features = _compute_level_features_parallel(df, window)
+    for col in extra_features.columns:
+        bars[col] = extra_features[col]
     bars['net_imbalance'] = bars['buy_imbalance_count'] - bars['sell_imbalance_count']
-
-    # Transaction speed features
-    bars['max_events_per_tick'] = resampled['price'].apply(lambda s: s.value_counts().max() if len(s) > 0 else 0)
-    total_vol_by_level = resampled.apply(lambda g: g.groupby('price')['txn_count'].sum().max() / g['txn_count'].sum() if len(g) > 0 and g['txn_count'].sum() > 0 else 0)
-    bars['level_concentration'] = total_vol_by_level
 
     # Drop windows with no data
     bars = bars.dropna(subset=['open'])
@@ -173,44 +168,79 @@ def compute_window_features(df, window='1min'):
 TICK_SIZE_FP = 0.25
 
 
-def _compute_all_imbalance_features(df, window):
-    """Compute per-bar imbalance features using vectorized groupby + multiprocessing."""
+def _compute_level_features_parallel(df, window):
+    """Compute imbalance + transaction speed features using chunked multiprocessing."""
+    import os as _os
+
+    # Collect all non-empty groups with minimal columns
     groups = []
     for ts, group in df.resample(window):
         if len(group) == 0:
             continue
-        groups.append((ts, group[['price', 'txn_count', 'direction']]))
+        groups.append((ts, group[['price', 'txn_count', 'direction']].values))
 
-    with ProcessPoolExecutor() as pool:
-        futures = {pool.submit(_process_one_bar, ts, g): ts for ts, g in groups}
-        records = []
-        for future in as_completed(futures):
-            records.append(future.result())
+    n_workers = min(_os.cpu_count() or 4, 14)
+    chunk_size = max(1, len(groups) // n_workers)
+    chunks = [groups[i:i + chunk_size] for i in range(0, len(groups), chunk_size)]
+
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        results = list(pool.map(_process_bar_chunk, chunks))
+
+    records = []
+    for chunk_records in results:
+        records.extend(chunk_records)
 
     result = pd.DataFrame(records).set_index('timestamp').sort_index()
     return result
 
 
-def _process_one_bar(ts, group):
-    """Compute imbalance features for a single bar (runs in worker process)."""
-    levels = _compute_level_buysell_fast(group)
-    return {
-        'timestamp': ts,
-        'buy_imbalance_count': _count_buy_imb(levels),
-        'sell_imbalance_count': _count_sell_imb(levels),
-        'buy_imbalance_cluster': _max_buy_cluster(levels),
-        'sell_imbalance_cluster': _max_sell_cluster(levels),
-    }
+def _process_bar_chunk(chunk):
+    """Process a batch of bars — runs in a worker process."""
+    records = []
+    for ts, arr in chunk:
+        # arr columns: price(0), txn_count(1), direction(2)
+        levels = _build_levels_from_array(arr)
+        total_vol = arr[:, 1].sum()
+        # Imbalance features
+        buy_imb = _count_buy_imb(levels)
+        sell_imb = _count_sell_imb(levels)
+        buy_cluster = _max_buy_cluster(levels)
+        sell_cluster = _max_sell_cluster(levels)
+        # Transaction speed features
+        prices, counts = np.unique(arr[:, 0], return_counts=True)
+        max_events = int(counts.max()) if len(counts) > 0 else 0
+        vol_by_price = {}
+        for i in range(len(arr)):
+            p = arr[i, 0]
+            vol_by_price[p] = vol_by_price.get(p, 0) + arr[i, 1]
+        max_level_vol = max(vol_by_price.values()) if vol_by_price else 0
+        concentration = max_level_vol / total_vol if total_vol > 0 else 0
+
+        records.append({
+            'timestamp': ts,
+            'buy_imbalance_count': buy_imb,
+            'sell_imbalance_count': sell_imb,
+            'buy_imbalance_cluster': buy_cluster,
+            'sell_imbalance_cluster': sell_cluster,
+            'max_events_per_tick': max_events,
+            'level_concentration': concentration,
+        })
+    return records
 
 
-def _compute_level_buysell_fast(group):
-    """Build dict of {price: [buy_vol, sell_vol]} using vectorized groupby."""
-    buys = group.loc[group['direction'] == 1].groupby('price')['txn_count'].sum()
-    sells = group.loc[group['direction'] == -1].groupby('price')['txn_count'].sum()
-    all_prices = set(buys.index) | set(sells.index)
+def _build_levels_from_array(arr):
+    """Build {price: [buy_vol, sell_vol]} from numpy array [price, txn_count, direction]."""
     levels = {}
-    for p in all_prices:
-        levels[p] = [int(buys.get(p, 0)), int(sells.get(p, 0))]
+    for i in range(len(arr)):
+        p = arr[i, 0]
+        vol = arr[i, 1]
+        d = arr[i, 2]
+        if p not in levels:
+            levels[p] = [0, 0]
+        if d == 1:
+            levels[p][0] += vol
+        elif d == -1:
+            levels[p][1] += vol
     return levels
 
 
