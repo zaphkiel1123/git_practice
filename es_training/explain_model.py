@@ -319,7 +319,7 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
 
     report_path = os.path.join(output_dir, 'factor_report.txt')
-    with open(report_path, 'w') as f:
+    with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report)
     print(f"\nReport saved to: {report_path}")
 
@@ -329,8 +329,8 @@ def main():
         'trade_explanations': trade_explanations,
     }
     json_path = os.path.join(output_dir, 'factor_analysis.json')
-    with open(json_path, 'w') as f:
-        json.dump(full_results, f, indent=2, default=str)
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(full_results, f, indent=2, default=str, ensure_ascii=False)
     print(f"Full analysis saved to: {json_path}")
 
 
