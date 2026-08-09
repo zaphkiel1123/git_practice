@@ -196,7 +196,6 @@ def train_entry_signal_model(X_train, y_train, X_test, y_test, feature_names):
             feature_fraction=0.7, bagging_fraction=0.7, bagging_freq=5,
             min_child_samples=20, reg_alpha=0.1, reg_lambda=0.1,
             verbosity=-1, n_jobs=-1,
-            device='gpu',
         )
         model.fit(X_train, y_tr_mapped,
                   eval_set=[(X_test, y_te_mapped)],
@@ -251,7 +250,6 @@ def train_volatility_model(X_train, y_train, X_test, y_test, feature_names):
             num_leaves=31, feature_fraction=0.8,
             bagging_fraction=0.8, bagging_freq=5,
             verbosity=-1, n_jobs=-1,
-            device='gpu',
         )
         model.fit(X_tr, y_tr,
                   eval_set=[(X_te, y_te)],
@@ -285,7 +283,6 @@ def train_quality_model(X_train, y_train, X_test, y_test, feature_names):
             feature_fraction=0.7, bagging_fraction=0.7, bagging_freq=5,
             min_child_samples=30, reg_alpha=0.2, reg_lambda=0.2,
             verbosity=-1, n_jobs=-1,
-            device='gpu',
         )
         model.fit(X_train, y_train,
                   eval_set=[(X_test, y_test)],
