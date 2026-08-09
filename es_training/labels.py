@@ -6,8 +6,10 @@ TP (1.5R+) is hit before SL using subsequent OHLC data.
 Provides dynamic SL sizing based on ATR and recent volatility.
 """
 
+import os
 import numpy as np
 import pandas as pd
+from concurrent.futures import ProcessPoolExecutor
 
 
 TICK_SIZE = 0.25
@@ -60,21 +62,26 @@ def simulate_trade_outcomes(bars, sl_points, rr_ratio=1.5, max_hold_bars=60, min
     """
     For each bar, simulate a LONG and SHORT entry at close price.
     Check subsequent bars to see if TP or SL is hit first.
-
-    Returns DataFrame with columns:
-        long_result: 1=WIN, -1=LOSS, 0=TIMEOUT
-        short_result: 1=WIN, -1=LOSS, 0=TIMEOUT
-        long_bars_held: bars until exit
-        short_bars_held: bars until exit
-        long_mae: maximum adverse excursion (points)
-        short_mae: maximum adverse excursion (points)
-        long_mfe: maximum favorable excursion (points)
-        short_mfe: maximum favorable excursion (points)
+    Uses multiprocessing to parallelize across chunks of bars.
     """
     n = len(bars)
     closes = bars['close'].values
     highs = bars['high'].values
     lows = bars['low'].values
+
+    sl_arr = sl_points.values if hasattr(sl_points, 'values') else np.asarray(sl_points)
+    min_tp_points = min_tp_ticks * TICK_SIZE
+    tp_arr = np.maximum(sl_arr * rr_ratio, min_tp_points)
+
+    n_workers = min(os.cpu_count() or 4, 8)
+    chunk_size = max(1, n // n_workers)
+    chunks = []
+    for start in range(0, n, chunk_size):
+        end = min(start + chunk_size, n)
+        chunks.append((start, end, closes, highs, lows, sl_arr, tp_arr, max_hold_bars))
+
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        results = list(pool.map(_simulate_chunk, chunks))
 
     long_result = np.zeros(n, dtype=np.int8)
     short_result = np.zeros(n, dtype=np.int8)
@@ -85,11 +92,47 @@ def simulate_trade_outcomes(bars, sl_points, rr_ratio=1.5, max_hold_bars=60, min
     long_mfe = np.zeros(n, dtype=np.float32)
     short_mfe = np.zeros(n, dtype=np.float32)
 
-    sl_arr = sl_points.values if hasattr(sl_points, 'values') else sl_points
-    min_tp_points = min_tp_ticks * TICK_SIZE
-    tp_arr = np.maximum(sl_arr * rr_ratio, min_tp_points)
+    for (start, end, lr, sr, lbh, sbh, lmae, smae, lmfe, smfe) in results:
+        long_result[start:end] = lr
+        short_result[start:end] = sr
+        long_bars_held[start:end] = lbh
+        short_bars_held[start:end] = sbh
+        long_mae[start:end] = lmae
+        short_mae[start:end] = smae
+        long_mfe[start:end] = lmfe
+        short_mfe[start:end] = smfe
 
-    for i in range(n - 1):
+    return pd.DataFrame({
+        'long_result': long_result,
+        'short_result': short_result,
+        'long_bars_held': long_bars_held,
+        'short_bars_held': short_bars_held,
+        'long_mae': long_mae,
+        'short_mae': short_mae,
+        'long_mfe': long_mfe,
+        'short_mfe': short_mfe,
+    }, index=bars.index)
+
+
+def _simulate_chunk(args):
+    """Process a chunk of bars for trade simulation (runs in worker process)."""
+    start, end, closes, highs, lows, sl_arr, tp_arr, max_hold_bars = args
+    n = len(closes)
+    chunk_len = end - start
+
+    lr = np.zeros(chunk_len, dtype=np.int8)
+    sr = np.zeros(chunk_len, dtype=np.int8)
+    lbh = np.full(chunk_len, max_hold_bars, dtype=np.int16)
+    sbh = np.full(chunk_len, max_hold_bars, dtype=np.int16)
+    lmae = np.zeros(chunk_len, dtype=np.float32)
+    smae = np.zeros(chunk_len, dtype=np.float32)
+    lmfe = np.zeros(chunk_len, dtype=np.float32)
+    smfe = np.zeros(chunk_len, dtype=np.float32)
+
+    for idx in range(chunk_len):
+        i = start + idx
+        if i >= n - 1:
+            break
         entry = closes[i]
         sl = sl_arr[i]
         tp = tp_arr[i]
@@ -105,7 +148,6 @@ def simulate_trade_outcomes(bars, sl_points, rr_ratio=1.5, max_hold_bars=60, min
         for j in range(i + 1, min(i + 1 + max_hold_bars, n)):
             l_mfe_val = max(l_mfe_val, highs[j] - entry)
             l_mae_val = max(l_mae_val, entry - lows[j])
-
             if lows[j] <= long_sl_price:
                 l_result = -1
                 l_bars = j - i
@@ -115,10 +157,10 @@ def simulate_trade_outcomes(bars, sl_points, rr_ratio=1.5, max_hold_bars=60, min
                 l_bars = j - i
                 break
 
-        long_result[i] = l_result
-        long_bars_held[i] = l_bars
-        long_mae[i] = l_mae_val
-        long_mfe[i] = l_mfe_val
+        lr[idx] = l_result
+        lbh[idx] = l_bars
+        lmae[idx] = l_mae_val
+        lmfe[idx] = l_mfe_val
 
         # Short trade
         short_sl_price = entry + sl
@@ -131,7 +173,6 @@ def simulate_trade_outcomes(bars, sl_points, rr_ratio=1.5, max_hold_bars=60, min
         for j in range(i + 1, min(i + 1 + max_hold_bars, n)):
             s_mfe_val = max(s_mfe_val, entry - lows[j])
             s_mae_val = max(s_mae_val, highs[j] - entry)
-
             if highs[j] >= short_sl_price:
                 s_result = -1
                 s_bars = j - i
@@ -141,21 +182,12 @@ def simulate_trade_outcomes(bars, sl_points, rr_ratio=1.5, max_hold_bars=60, min
                 s_bars = j - i
                 break
 
-        short_result[i] = s_result
-        short_bars_held[i] = s_bars
-        short_mae[i] = s_mae_val
-        short_mfe[i] = s_mfe_val
+        sr[idx] = s_result
+        sbh[idx] = s_bars
+        smae[idx] = s_mae_val
+        smfe[idx] = s_mfe_val
 
-    return pd.DataFrame({
-        'long_result': long_result,
-        'short_result': short_result,
-        'long_bars_held': long_bars_held,
-        'short_bars_held': short_bars_held,
-        'long_mae': long_mae,
-        'short_mae': short_mae,
-        'long_mfe': long_mfe,
-        'short_mfe': short_mfe,
-    }, index=bars.index)
+    return (start, end, lr, sr, lbh, sbh, lmae, smae, lmfe, smfe)
 
 
 def create_trade_labels(bars, atr_period=14, atr_multiplier=1.5,

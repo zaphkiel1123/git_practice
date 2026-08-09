@@ -18,6 +18,7 @@ import argparse
 import os
 import sys
 import json
+import time
 import warnings
 from datetime import datetime
 
@@ -355,6 +356,8 @@ def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60):
     import glob
     from concurrent.futures import ProcessPoolExecutor
 
+    pipeline_start = time.time()
+
     pattern = os.path.join(data_dir, '*.data')
     files = sorted(glob.glob(pattern))
     if not files:
@@ -362,6 +365,7 @@ def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60):
         sys.exit(1)
 
     print(f"Found {len(files)} data file(s)")
+    t0 = time.time()
     all_dfs = []
     with ProcessPoolExecutor() as executor:
         for name, n_ticks, df in executor.map(_load_single_file, files):
@@ -369,14 +373,16 @@ def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60):
             print(f"  {name}: {n_ticks:,} ticks")
 
     raw_df = pd.concat(all_dfs, ignore_index=True).sort_values('timestamp').reset_index(drop=True)
-    print(f"Total ticks: {len(raw_df):,}")
+    print(f"Total ticks: {len(raw_df):,} [{time.time()-t0:.1f}s]")
 
     # Compute bars
+    t0 = time.time()
     print(f"Computing {window} bars...")
     bars = compute_window_features(raw_df, window=window)
-    print(f"  {len(bars)} bars")
+    print(f"  {len(bars)} bars [{time.time()-t0:.1f}s]")
 
     # Add features
+    t0 = time.time()
     print("Adding rolling features...")
     bars = add_rolling_features(bars)
     print("Adding time features...")
@@ -385,10 +391,13 @@ def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60):
     bars = add_microstructure_features(bars)
     print("Adding multi-timeframe features...")
     bars = add_multi_timeframe_features(bars)
+    print(f"  Feature engineering [{time.time()-t0:.1f}s]")
 
     # Add trade labels
+    t0 = time.time()
     print(f"Simulating trade outcomes (RR={rr_ratio}, max_hold={max_hold_bars} bars)...")
     bars = create_trade_labels(bars, rr_ratio=rr_ratio, max_hold_bars=max_hold_bars)
+    print(f"  Trade simulation [{time.time()-t0:.1f}s]")
 
     # ATR target for volatility model
     bars['atr_target'] = compute_atr(bars, period=5).shift(-5)
@@ -401,6 +410,7 @@ def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60):
     # Drop NaN rows from rolling features
     bars = bars.dropna()
     print(f"Complete bars after dropna: {len(bars)}")
+    print(f"  Total pipeline [{time.time()-pipeline_start:.1f}s]")
 
     return bars
 
@@ -437,6 +447,7 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
     print(f"  ENTRY SIGNAL MODEL (direction prediction)")
     print(f"{'='*60}")
 
+    t0 = time.time()
     signal_metrics = []
     best_signal_model = None
     best_signal_acc = 0
@@ -458,12 +469,14 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
         if metrics['accuracy_trades'] > best_signal_acc:
             best_signal_acc = metrics['accuracy_trades']
             best_signal_model = model
+    print(f"  Signal model training [{time.time()-t0:.1f}s]")
 
     # ---- Volatility Model (uses all bars, not just RTH) ----
     print(f"\n{'='*60}")
     print(f"  VOLATILITY MODEL (ATR prediction for SL sizing)")
     print(f"{'='*60}")
 
+    t0 = time.time()
     vol_splits = walk_forward_split(len(bars), n_folds=n_folds)
     vol_metrics = []
     best_vol_model = None
@@ -483,12 +496,14 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
         if metrics['mae'] < best_vol_mae:
             best_vol_mae = metrics['mae']
             best_vol_model = model
+    print(f"  Volatility model training [{time.time()-t0:.1f}s]")
 
     # ---- Trade Quality Model (RTH only, only on trade signals) ----
     print(f"\n{'='*60}")
     print(f"  TRADE QUALITY MODEL (win probability filter)")
     print(f"{'='*60}")
 
+    t0 = time.time()
     # Train on all bars with a definitive trade outcome (win or loss, not just winners)
     y_has_outcome = bars['has_trade_outcome'].values
     trade_mask_rth = (y_has_outcome[rth_indices] != 0)
@@ -523,6 +538,7 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
         print("  Insufficient trade samples for quality model")
         quality_metrics = []
         best_quality_model = None
+    print(f"  Quality model training [{time.time()-t0:.1f}s]")
 
     # ---- Feature Importance ----
     print(f"\n{'='*60}")

@@ -16,7 +16,9 @@ import os
 import sys
 import argparse
 import glob
+import time
 from datetime import datetime, timedelta
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -172,35 +174,43 @@ TICK_SIZE_FP = 0.25
 
 
 def _compute_all_imbalance_features(df, window):
-    """Compute per-bar imbalance features by iterating over resampled groups."""
-    records = []
+    """Compute per-bar imbalance features using vectorized groupby + multiprocessing."""
+    groups = []
     for ts, group in df.resample(window):
         if len(group) == 0:
             continue
-        levels = _compute_level_buysell(group)
-        records.append({
-            'timestamp': ts,
-            'buy_imbalance_count': _count_buy_imb(levels),
-            'sell_imbalance_count': _count_sell_imb(levels),
-            'buy_imbalance_cluster': _max_buy_cluster(levels),
-            'sell_imbalance_cluster': _max_sell_cluster(levels),
-        })
-    result = pd.DataFrame(records).set_index('timestamp')
+        groups.append((ts, group[['price', 'txn_count', 'direction']]))
+
+    with ProcessPoolExecutor() as pool:
+        futures = {pool.submit(_process_one_bar, ts, g): ts for ts, g in groups}
+        records = []
+        for future in as_completed(futures):
+            records.append(future.result())
+
+    result = pd.DataFrame(records).set_index('timestamp').sort_index()
     return result
 
 
-def _compute_level_buysell(group):
-    """Build dict of {price: [buy_vol, sell_vol]} for a bar's ticks."""
+def _process_one_bar(ts, group):
+    """Compute imbalance features for a single bar (runs in worker process)."""
+    levels = _compute_level_buysell_fast(group)
+    return {
+        'timestamp': ts,
+        'buy_imbalance_count': _count_buy_imb(levels),
+        'sell_imbalance_count': _count_sell_imb(levels),
+        'buy_imbalance_cluster': _max_buy_cluster(levels),
+        'sell_imbalance_cluster': _max_sell_cluster(levels),
+    }
+
+
+def _compute_level_buysell_fast(group):
+    """Build dict of {price: [buy_vol, sell_vol]} using vectorized groupby."""
+    buys = group.loc[group['direction'] == 1].groupby('price')['txn_count'].sum()
+    sells = group.loc[group['direction'] == -1].groupby('price')['txn_count'].sum()
+    all_prices = set(buys.index) | set(sells.index)
     levels = {}
-    for _, row in group.iterrows():
-        p = row['price']
-        vol = row['txn_count']
-        if p not in levels:
-            levels[p] = [0, 0]
-        if row['direction'] == 1:
-            levels[p][0] += vol
-        elif row['direction'] == -1:
-            levels[p][1] += vol
+    for p in all_prices:
+        levels[p] = [int(buys.get(p, 0)), int(sells.get(p, 0))]
     return levels
 
 
