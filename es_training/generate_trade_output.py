@@ -117,6 +117,7 @@ def trades_to_json(trades_df, output_path):
             'tp_price': float(row['tp_price']),
             'exit_price': float(row['exit_price']),
             'exit_reason': row['exit_reason'],
+            'entry_reason': str(row.get('entry_reason', '')),
             'pnl_points': pnl,
             'result': result,
         })

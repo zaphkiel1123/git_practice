@@ -635,6 +635,15 @@
                     ctx.textBaseline = 'bottom';
                     const pnlText = (trade.pnl_points >= 0 ? '+' : '') + trade.pnl_points.toFixed(2);
                     ctx.fillText(pnlText, entryX + 8, entryY - 2);
+
+                    // Entry reason label
+                    if (trade.entry_reason) {
+                        ctx.font = '9px monospace';
+                        ctx.fillStyle = '#aaa';
+                        ctx.textAlign = 'left';
+                        ctx.textBaseline = 'top';
+                        ctx.fillText(trade.entry_reason, entryX + 8, entryY + 4);
+                    }
                 }
             });
         }

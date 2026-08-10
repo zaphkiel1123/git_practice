@@ -36,13 +36,14 @@ COMMISSION = 2.50   # per side per contract
 
 
 class Trade:
-    def __init__(self, entry_time, entry_price, direction, sl_price, tp_price, bar_idx):
+    def __init__(self, entry_time, entry_price, direction, sl_price, tp_price, bar_idx, entry_reason=''):
         self.entry_time = entry_time
         self.entry_price = entry_price
         self.direction = direction  # +1 long, -1 short
         self.sl_price = sl_price
         self.tp_price = tp_price
         self.bar_idx = bar_idx
+        self.entry_reason = entry_reason
         self.exit_time = None
         self.exit_price = None
         self.exit_reason = None
@@ -68,6 +69,26 @@ class Backtester:
         self.sl_multiplier = sl_multiplier
         self.min_sl = min_sl
         self.max_sl = max_sl
+
+    def _get_entry_reason(self, X, direction):
+        """Get the top contributing feature for this trade entry."""
+        try:
+            # LightGBM: use pred_contrib for per-sample feature contributions
+            if hasattr(self.signal_model, 'predict_proba') and hasattr(self.signal_model, 'booster_'):
+                contribs = self.signal_model.predict_proba(X, raw_score=False)
+                # Fall back to feature importance * feature z-score
+                raise AttributeError
+        except (AttributeError, TypeError):
+            pass
+        # Fallback: top feature by importance * absolute feature value rank
+        imp = self.signal_model.feature_importances_
+        vals = X[0]
+        # Weighted score: importance * |value| percentile-ish signal
+        scores = imp * np.abs(vals)
+        top_idx = int(np.argmax(scores))
+        feat_name = self.feature_cols[top_idx]
+        feat_val = vals[top_idx]
+        return f"{feat_name}={feat_val:.2f}"
 
     def run(self, bars):
         """Run backtest on prepared feature DataFrame."""
@@ -217,7 +238,8 @@ class Backtester:
                     direction=pred_direction,
                     sl_price=sl_price,
                     tp_price=tp_price,
-                    bar_idx=i
+                    bar_idx=i,
+                    entry_reason=self._get_entry_reason(X, pred_direction),
                 )
 
             equity_curve.append({'time': current_time, 'equity': equity})
@@ -321,6 +343,7 @@ def trades_to_dataframe(trades):
             'sl_price': t.sl_price,
             'tp_price': t.tp_price,
             'exit_reason': t.exit_reason,
+            'entry_reason': t.entry_reason,
             'pnl_points': t.pnl_points,
             'pnl_dollars': t.pnl_dollars,
             'bars_held': t.bars_held,
