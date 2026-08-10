@@ -126,18 +126,21 @@ def trades_to_json(trades_df, output_path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate weekly tick .data and trades.json for candlestick viewer.')
+        description='Generate tick .data and trades.json for candlestick viewer.')
     parser.add_argument('models_dir', help='Directory with models and backtest results')
     parser.add_argument('--data', required=True, help='Directory with raw 57-byte tick .data files')
     parser.add_argument('--trades', default=None, help='Backtest trades CSV')
     parser.add_argument('--output', default=None, help='Output directory')
+    parser.add_argument('--per-trade', action='store_true',
+                        help='Generate one .data + .json per trade with context')
+    parser.add_argument('--context-bars', type=int, default=30,
+                        help='1-min bars of context before entry (default: 30)')
 
     args = parser.parse_args()
 
     output_dir = args.output or os.path.join(args.models_dir, 'viewer_output')
     os.makedirs(output_dir, exist_ok=True)
 
-    # Read all raw tick files
     pattern = os.path.join(args.data, '*.data')
     files = sorted(glob.glob(pattern))
     if not files:
@@ -154,15 +157,22 @@ def main():
     all_records.sort(key=lambda r: r[0])
     print(f"Total: {len(all_records):,} ticks")
 
-    # Split by ISO week and write
+    trades_path = args.trades or os.path.join(args.models_dir, 'backtest_trades.csv')
+
+    if args.per_trade:
+        _generate_per_trade(all_records, trades_path, output_dir, args.context_bars)
+    else:
+        _generate_weekly(all_records, trades_path, output_dir)
+
+
+def _generate_weekly(all_records, trades_path, output_dir):
+    """Split ticks by ISO week and write weekly .data + .json files."""
     weeks = split_records_by_week(all_records)
     print(f"\nGenerating weekly tick .data files ({len(weeks)} weeks)...")
     for label in sorted(weeks.keys()):
         out_path = os.path.join(output_dir, f"{label}.data")
         write_tick_data(weeks[label], out_path)
 
-    # Split trades by week
-    trades_path = args.trades or os.path.join(args.models_dir, 'backtest_trades.csv')
     if os.path.isfile(trades_path) and os.path.getsize(trades_path) > 0:
         trades_df = pd.read_csv(trades_path)
         trade_weeks = split_trades_by_week(trades_df)
@@ -171,18 +181,78 @@ def main():
             json_path = os.path.join(output_dir, f"{label}.json")
             trades_to_json(trade_weeks[label], json_path)
 
-        # Also write any weeks with ticks but no trades as empty json
         for label in sorted(weeks.keys()):
             json_path = os.path.join(output_dir, f"{label}.json")
             if not os.path.isfile(json_path):
                 with open(json_path, 'w') as f:
                     json.dump({'trades': [], 'generated_at': datetime.now().isoformat()}, f, indent=2)
-    else:
-        print(f"  No trades file found at {trades_path}, skipping trades.json")
 
-    print(f"\nOutput in: {output_dir}")
-    print(f"  Load {label}.data with 'tick .data' button in viewer")
-    print(f"  Load {label}.json for matching trade markers")
+    print(f"\nWeekly output in: {output_dir}")
+
+
+def _generate_per_trade(all_records, trades_path, output_dir, context_bars):
+    """Generate one .data + .json per trade with context window."""
+    if not os.path.isfile(trades_path) or os.path.getsize(trades_path) == 0:
+        print(f"ERROR: No trades file at {trades_path}", file=sys.stderr)
+        sys.exit(1)
+
+    trades_dir = os.path.join(output_dir, 'trades')
+    os.makedirs(trades_dir, exist_ok=True)
+
+    trades_df = pd.read_csv(trades_path)
+    print(f"\nGenerating per-trade files ({len(trades_df)} trades, {context_bars} bars context)...")
+
+    timestamps = np.array([r[0].timestamp() for r in all_records])
+    after_exit_bars = 5
+
+    for idx, row in trades_df.iterrows():
+        entry_time = pd.Timestamp(row['entry_time'])
+        exit_time = pd.Timestamp(row['exit_time'])
+        direction = row['direction']
+        result = 'W' if row.get('pnl_points', 0) > 0 else 'L'
+
+        window_start = entry_time - timedelta(minutes=context_bars)
+        window_end = exit_time + timedelta(minutes=after_exit_bars)
+
+        i_start = int(np.searchsorted(timestamps, window_start.timestamp(), side='left'))
+        i_end = int(np.searchsorted(timestamps, window_end.timestamp(), side='right'))
+
+        if i_end <= i_start:
+            continue
+
+        entry_str = entry_time.strftime('%Y%m%d_%H%M')
+        prefix = f"trade_{idx+1:04d}_{entry_str}_{direction[0]}_{result}"
+
+        data_path = os.path.join(trades_dir, f"{prefix}.data")
+        with open(data_path, 'wb') as f:
+            for rec_idx in range(i_start, i_end):
+                f.write(all_records[rec_idx][1])
+
+        entry_unix = int(entry_time.tz_localize('UTC').timestamp()) if entry_time.tzinfo is None else int(entry_time.timestamp())
+        exit_unix = int(exit_time.tz_localize('UTC').timestamp()) if exit_time.tzinfo is None else int(exit_time.timestamp())
+        pnl = float(row.get('pnl_points', 0))
+        trade_json = {
+            'trades': [{
+                'entry_time': entry_unix,
+                'exit_time': exit_unix,
+                'direction': direction,
+                'entry_price': float(row['entry_price']),
+                'sl_price': float(row['sl_price']),
+                'tp_price': float(row['tp_price']),
+                'exit_price': float(row['exit_price']),
+                'exit_reason': row['exit_reason'],
+                'entry_reason': str(row.get('entry_reason', '')),
+                'pnl_points': pnl,
+                'result': 'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
+            }],
+        }
+        json_path = os.path.join(trades_dir, f"{prefix}.json")
+        with open(json_path, 'w') as f:
+            json.dump(trade_json, f, indent=2)
+
+        print(f"  {prefix}: {i_end - i_start:,} ticks")
+
+    print(f"\nPer-trade output in: {trades_dir}")
 
 
 if __name__ == '__main__':

@@ -5,7 +5,12 @@
 python train_trading_model.py ./data --rr 1.5
 python backtester.py ./data/models --rr 1.5
 python explain_model.py ./data/models --trades ./data/models/backtest_trades.csv
-python generate_trade_output.py ./data/models
+python generate_trade_output.py ./data/models --data ./data/
+
+# Generate per-trade viewer files (30 bars context before entry):
+python generate_trade_output.py ./data/models --data ./data/ --per-trade
+# Custom context (50 bars before entry):
+python generate_trade_output.py ./data/models --data ./data/ --per-trade --context-bars 50
 
 # Live signals:
 python live_signal.py ./data/models --file new_session.data
@@ -40,7 +45,11 @@ python live_signal.py ./data/models --watch /path/to/live/
 #              ./data/models/factor_report.txt
 #
 # generate_trade_output.py
-#   consumes: ./data/models/training_features.parquet (bars with OHLCV)
+#   consumes: ./data/*.data (raw 57-byte tick files)
 #             ./data/models/backtest_trades.csv
-#   generates: ./data/models/viewer_output/bars.data (60-byte minute binary for viewer)
-#              ./data/models/viewer_output/trades.json (marker overlay for viewer)
+#   generates (weekly mode, default):
+#              ./data/models/viewer_output/{YYYY-WNN}.data (tick data per week)
+#              ./data/models/viewer_output/{YYYY-WNN}.json (trades per week)
+#   generates (--per-trade mode):
+#              ./data/models/viewer_output/trades/trade_NNNN_{date}_{D}_{R}.data
+#              ./data/models/viewer_output/trades/trade_NNNN_{date}_{D}_{R}.json
