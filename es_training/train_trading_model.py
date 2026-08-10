@@ -69,8 +69,8 @@ def add_microstructure_features(bars, raw_df=None):
     bars['delta_direction'] = np.sign(bars['delta'])
     bars['delta_divergence'] = (bars['bar_direction'] != bars['delta_direction']).astype(int)
 
-    # CVD (cumulative volume delta) and its derivatives
-    bars['cvd'] = bars['delta'].cumsum()
+    # CVD (cumulative volume delta) — resets at session boundary (17:00 CT / 18:00 ET)
+    bars['cvd'] = _compute_session_cvd(bars['delta'], bars.index)
     bars['cvd_slope_3'] = bars['cvd'].diff(3) / 3
     bars['cvd_slope_5'] = bars['cvd'].diff(5) / 5
     bars['cvd_slope_10'] = bars['cvd'].diff(10) / 10
@@ -164,6 +164,27 @@ def _compute_streak(signs):
     return streak
 
 
+def _compute_session_cvd(delta_series, timestamps):
+    """Compute CVD that resets at each session boundary (17:00 CT = 18:00 ET)."""
+    SESSION_RESET_HOUR_CT = 17
+    deltas = delta_series.values
+    hours = timestamps.hour
+    cvd = np.zeros(len(deltas), dtype=np.float64)
+    running = 0.0
+    prev_hour = -1
+    for i in range(len(deltas)):
+        cur_hour = hours[i]
+        # Reset when crossing 17:00 CT
+        if prev_hour < SESSION_RESET_HOUR_CT and cur_hour >= SESSION_RESET_HOUR_CT:
+            running = 0.0
+        elif cur_hour < prev_hour and prev_hour >= SESSION_RESET_HOUR_CT:
+            running = 0.0
+        running += deltas[i]
+        cvd[i] = running
+        prev_hour = cur_hour
+    return pd.Series(cvd, index=delta_series.index)
+
+
 def add_multi_timeframe_features(bars):
     """Add features from higher timeframe aggregation (5-bar, 15-bar). Order-flow focused."""
     for tf in [5, 15]:
@@ -235,7 +256,7 @@ def train_entry_signal_model(X_train, y_train, X_test, y_test, feature_names):
             verbosity=-1, n_jobs=-1,
         )
         model.fit(X_train, y_tr_mapped,
-                  eval_set=[(X_test, y_te_mapped)],
+                  eval_X=X_test, eval_y=y_te_mapped,
                   callbacks=[lgb.early_stopping(50, verbose=False)])
         y_pred_mapped = model.predict(X_test)
         y_pred = y_pred_mapped - 1
@@ -289,7 +310,7 @@ def train_volatility_model(X_train, y_train, X_test, y_test, feature_names):
             verbosity=-1, n_jobs=-1,
         )
         model.fit(X_tr, y_tr,
-                  eval_set=[(X_te, y_te)],
+                  eval_X=X_te, eval_y=y_te,
                   callbacks=[lgb.early_stopping(30, verbose=False)])
     else:
         model = GradientBoostingRegressor(
@@ -322,7 +343,7 @@ def train_quality_model(X_train, y_train, X_test, y_test, feature_names):
             verbosity=-1, n_jobs=-1,
         )
         model.fit(X_train, y_train,
-                  eval_set=[(X_test, y_test)],
+                  eval_X=X_test, eval_y=y_test,
                   callbacks=[lgb.early_stopping(50, verbose=False)])
     else:
         model = GradientBoostingClassifier(
