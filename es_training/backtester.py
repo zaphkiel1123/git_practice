@@ -71,24 +71,71 @@ class Backtester:
         self.max_sl = max_sl
 
     def _get_entry_reason(self, X, direction):
-        """Get the top contributing feature for this trade entry."""
-        try:
-            # LightGBM: use pred_contrib for per-sample feature contributions
-            if hasattr(self.signal_model, 'predict_proba') and hasattr(self.signal_model, 'booster_'):
-                contribs = self.signal_model.predict_proba(X, raw_score=False)
-                # Fall back to feature importance * feature z-score
-                raise AttributeError
-        except (AttributeError, TypeError):
-            pass
-        # Fallback: top feature by importance * absolute feature value rank
+        """Explain why this trade was taken using per-prediction feature contributions."""
+        dir_label = 'long' if direction == 1 else 'short'
+
+        # LightGBM: get per-sample leaf SHAP contributions
+        if hasattr(self.signal_model, 'booster_'):
+            # pred_contrib returns shape (n_samples, n_features+1, n_classes)
+            # Last column is bias. Classes: 0=short, 1=no_trade, 2=long
+            raw = self.signal_model.booster_.predict(X, pred_contrib=True)
+            if raw.ndim == 2:
+                # Binary or flattened: reshape to (1, n_features+1, n_classes)
+                n_classes = 3
+                raw = raw.reshape(1, -1, n_classes)
+            class_idx = 2 if direction == 1 else 0  # long=2, short=0
+            contribs = raw[0, :-1, class_idx]  # exclude bias term
+            top_idx = int(np.argmax(np.abs(contribs)))
+            feat_name = self.feature_cols[top_idx]
+            contrib_val = contribs[top_idx]
+            feat_val = X[0, top_idx]
+            return self._format_reason(feat_name, feat_val, contrib_val, dir_label)
+
+        # Fallback for sklearn: use importance * z-score direction
         imp = self.signal_model.feature_importances_
         vals = X[0]
-        # Weighted score: importance * |value| percentile-ish signal
         scores = imp * np.abs(vals)
         top_idx = int(np.argmax(scores))
         feat_name = self.feature_cols[top_idx]
         feat_val = vals[top_idx]
-        return f"{feat_name}={feat_val:.2f}"
+        return f"{feat_name}={feat_val:.1f} → {dir_label}"
+
+    def _format_reason(self, feat_name, feat_val, contrib_val, dir_label):
+        """Format a human-readable entry reason from feature contribution."""
+        # Determine if the feature is pushing toward or confirming the direction
+        strength = 'strongly' if abs(contrib_val) > 0.5 else ''
+
+        if 'cvd' in feat_name:
+            if feat_val > 0 and dir_label == 'short':
+                ctx = f"CVD elevated ({feat_val:.0f}), buyers exhausted"
+            elif feat_val < 0 and dir_label == 'long':
+                ctx = f"CVD negative ({feat_val:.0f}), sellers exhausted"
+            elif feat_val > 0 and dir_label == 'long':
+                ctx = f"CVD rising ({feat_val:.0f}), momentum continuation"
+            else:
+                ctx = f"CVD falling ({feat_val:.0f}), momentum continuation"
+        elif 'imbalance' in feat_name:
+            if 'cluster' in feat_name:
+                ctx = f"imbalance cluster ({feat_val:.0f} levels stacked)"
+            else:
+                ctx = f"order imbalance {feat_val:+.0f}"
+        elif 'delta' in feat_name:
+            ctx = f"delta {'positive' if feat_val > 0 else 'negative'} ({feat_val:.0f})"
+        elif 'absorption' in feat_name:
+            ctx = f"volume absorption ({feat_val:.1f}x normal)"
+        elif 'vol_sum' in feat_name or 'volume' in feat_name:
+            ctx = f"volume {'surge' if feat_val > 1.5 else 'elevated'} ({feat_val:.0f})"
+        elif 'intensity' in feat_name:
+            ctx = f"trade speed {'accelerating' if feat_val > 0 else 'decelerating'}"
+        elif 'pressure' in feat_name:
+            side = 'buy' if feat_val > 1 else 'sell'
+            ctx = f"{side} pressure dominant ({feat_val:.2f})"
+        elif 'flow' in feat_name:
+            ctx = f"flow {'bullish' if feat_val > 0 else 'bearish'} ({feat_val:+.3f})"
+        else:
+            ctx = f"{feat_name}={feat_val:.2f}"
+
+        return f"{ctx} → {strength} {dir_label}".strip()
 
     def run(self, bars):
         """Run backtest on prepared feature DataFrame."""

@@ -619,7 +619,192 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
     print(f"  TRAINING COMPLETE")
     print(f"{'='*60}")
 
+    # ---- Trading Pattern Report ----
+    if best_signal_model:
+        _generate_pattern_report(best_signal_model, X_all, y_signal, feature_cols,
+                                 rth_indices, output_dir)
+
     return bars, best_signal_model, best_vol_model, best_quality_model
+
+
+# ============================================================
+# Pattern Discovery Report
+# ============================================================
+
+def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices, output_dir):
+    """Mine multi-condition trading rules from the trained model and actual outcomes."""
+    print(f"\n{'='*60}")
+    print(f"  TRADING PATTERN REPORT")
+    print(f"{'='*60}")
+
+    X_rth = X_all[rth_indices]
+    y_rth = y_signal[rth_indices]
+
+    # Get per-sample leaf contributions for direction classes
+    has_contribs = hasattr(model, 'booster_')
+    if has_contribs:
+        raw = model.booster_.predict(X_rth, pred_contrib=True)
+        n_feats = len(feature_cols)
+        # LightGBM multiclass: shape (n_samples, (n_features+1)*n_classes)
+        if raw.ndim == 2:
+            n_classes = 3
+            raw = raw.reshape(len(X_rth), n_feats + 1, n_classes)
+        contribs_long = raw[:, :n_feats, 2]   # contributions toward long
+        contribs_short = raw[:, :n_feats, 0]  # contributions toward short
+
+    # Define condition thresholds using percentiles
+    conditions = _build_conditions(X_rth, feature_cols)
+
+    # Find multi-condition patterns with high win rates
+    patterns = []
+    for direction, dir_label in [(1, 'LONG'), (-1, 'SHORT')]:
+        dir_mask = (y_rth == direction)
+        opp_mask = (y_rth == -direction)
+        trade_mask = dir_mask | opp_mask  # bars where either direction won
+
+        if trade_mask.sum() < 50:
+            continue
+
+        # Get top contributing features for this direction
+        if has_contribs:
+            contribs = contribs_long if direction == 1 else contribs_short
+            mean_contrib = contribs[dir_mask].mean(axis=0) if dir_mask.sum() > 0 else np.zeros(len(feature_cols))
+            top_features = np.argsort(np.abs(mean_contrib))[::-1][:8]
+        else:
+            imp = model.feature_importances_
+            top_features = np.argsort(imp)[::-1][:8]
+
+        # Search for 2-3 condition patterns among top features
+        for i in range(len(top_features)):
+            fi = top_features[i]
+            for cond_i in conditions.get(fi, []):
+                mask_i = cond_i['mask']
+                for j in range(i + 1, len(top_features)):
+                    fj = top_features[j]
+                    for cond_j in conditions.get(fj, []):
+                        mask_ij = mask_i & cond_j['mask']
+                        n_trades = (mask_ij & trade_mask).sum()
+                        if n_trades < 20:
+                            continue
+                        n_wins = (mask_ij & dir_mask).sum()
+                        win_rate = n_wins / n_trades if n_trades > 0 else 0
+                        if win_rate >= 0.55:
+                            patterns.append({
+                                'direction': dir_label,
+                                'conditions': [cond_i['desc'], cond_j['desc']],
+                                'win_rate': win_rate,
+                                'n_trades': int(n_trades),
+                                'n_wins': int(n_wins),
+                            })
+
+    # Sort by win_rate * n_trades (balance quality and quantity)
+    patterns.sort(key=lambda p: p['win_rate'] * p['n_trades'], reverse=True)
+    patterns = patterns[:30]  # top 30 patterns
+
+    # Print report
+    report_lines = []
+    report_lines.append("=" * 70)
+    report_lines.append("  DISCOVERED TRADING PATTERNS")
+    report_lines.append("  (multi-condition rules with >55% win rate, min 20 occurrences)")
+    report_lines.append("=" * 70)
+
+    for idx, p in enumerate(patterns, 1):
+        report_lines.append(f"\n  Pattern #{idx}: {p['direction']} — {p['win_rate']:.0%} win rate ({p['n_wins']}/{p['n_trades']} trades)")
+        report_lines.append(f"  When:")
+        for cond in p['conditions']:
+            report_lines.append(f"    • {cond}")
+        report_lines.append(f"  → {p['win_rate']:.0%} chance of {p['direction'].lower()} continuation")
+
+    report_lines.append(f"\n{'='*70}")
+
+    report_text = '\n'.join(report_lines)
+    print(report_text)
+
+    # Save to file
+    report_path = os.path.join(output_dir, 'trading_patterns.txt')
+    with open(report_path, 'w') as f:
+        f.write(report_text)
+    print(f"\n  Pattern report → {report_path}")
+
+    # Also save as JSON for programmatic use
+    json_path = os.path.join(output_dir, 'trading_patterns.json')
+    with open(json_path, 'w') as f:
+        json.dump({'patterns': patterns, 'generated_at': datetime.now().isoformat()}, f, indent=2)
+
+
+def _build_conditions(X, feature_cols):
+    """Build testable conditions for each feature using meaningful thresholds."""
+    conditions = {}
+    n = len(X)
+
+    for fi, fname in enumerate(feature_cols):
+        vals = X[:, fi]
+        conditions[fi] = []
+
+        if 'cvd' == fname or fname.startswith('cvd_slope') or fname.startswith('cvd_accel'):
+            # CVD: rising vs falling, extreme levels
+            med = np.median(vals)
+            p75 = np.percentile(vals, 75)
+            p25 = np.percentile(vals, 25)
+            conditions[fi].append({'mask': vals > p75, 'desc': f'{fname} elevated (>{p75:.0f}, top 25%)'})
+            conditions[fi].append({'mask': vals < p25, 'desc': f'{fname} depressed (<{p25:.0f}, bottom 25%)'})
+            conditions[fi].append({'mask': vals > 0, 'desc': f'{fname} positive (buyers leading)'})
+            conditions[fi].append({'mask': vals < 0, 'desc': f'{fname} negative (sellers leading)'})
+
+        elif 'imbalance' in fname:
+            if 'cluster' in fname:
+                conditions[fi].append({'mask': vals >= 3, 'desc': f'{fname} >= 3 (strong cluster)'})
+                conditions[fi].append({'mask': vals <= -3, 'desc': f'{fname} <= -3 (strong sell cluster)'})
+            else:
+                p75 = np.percentile(vals, 75)
+                p25 = np.percentile(vals, 25)
+                conditions[fi].append({'mask': vals > p75, 'desc': f'{fname} high (>{p75:.1f})'})
+                conditions[fi].append({'mask': vals < p25, 'desc': f'{fname} low (<{p25:.1f})'})
+
+        elif 'delta' in fname:
+            p80 = np.percentile(vals, 80)
+            p20 = np.percentile(vals, 20)
+            conditions[fi].append({'mask': vals > p80, 'desc': f'{fname} strongly positive (>{p80:.0f})'})
+            conditions[fi].append({'mask': vals < p20, 'desc': f'{fname} strongly negative (<{p20:.0f})'})
+            conditions[fi].append({'mask': vals > 0, 'desc': f'{fname} > 0 (net buying)'})
+            conditions[fi].append({'mask': vals < 0, 'desc': f'{fname} < 0 (net selling)'})
+
+        elif 'absorption' in fname:
+            p75 = np.percentile(vals, 75)
+            conditions[fi].append({'mask': vals > p75, 'desc': f'high {fname} (>{p75:.1f}x, trapped traders)'})
+            conditions[fi].append({'mask': vals > 2.0, 'desc': f'{fname} > 2x (extreme absorption)'})
+
+        elif 'divergence' in fname or '_div' in fname:
+            conditions[fi].append({'mask': vals == 1, 'desc': f'{fname} active (price/flow disagree)'})
+
+        elif 'intensity' in fname or 'surge' in fname:
+            p75 = np.percentile(vals, 75)
+            conditions[fi].append({'mask': vals > p75, 'desc': f'{fname} surging (>{p75:.1f})'})
+            conditions[fi].append({'mask': vals > 2.0, 'desc': f'{fname} > 2x (acceleration)'})
+
+        elif 'pressure' in fname:
+            conditions[fi].append({'mask': vals > 1.5, 'desc': f'{fname} > 1.5 (strong buy pressure)'})
+            conditions[fi].append({'mask': vals < 0.67, 'desc': f'{fname} < 0.67 (strong sell pressure)'})
+
+        elif 'consolidation' in fname:
+            conditions[fi].append({'mask': vals < 0.7, 'desc': 'range contracting (consolidation)'})
+            conditions[fi].append({'mask': vals > 1.3, 'desc': 'range expanding (breakout)'})
+
+        elif 'flow' in fname:
+            p75 = np.percentile(vals, 75)
+            p25 = np.percentile(vals, 25)
+            conditions[fi].append({'mask': vals > p75, 'desc': f'{fname} bullish (>{p75:.3f})'})
+            conditions[fi].append({'mask': vals < p25, 'desc': f'{fname} bearish (<{p25:.3f})'})
+
+        else:
+            # Generic: above/below median, extreme quartiles
+            p75 = np.percentile(vals, 75)
+            p25 = np.percentile(vals, 25)
+            if not np.isnan(p75) and p75 != p25:
+                conditions[fi].append({'mask': vals > p75, 'desc': f'{fname} high (>{p75:.2f})'})
+                conditions[fi].append({'mask': vals < p25, 'desc': f'{fname} low (<{p25:.2f})'})
+
+    return conditions
 
 
 def main():
