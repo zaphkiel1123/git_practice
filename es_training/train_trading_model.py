@@ -708,12 +708,30 @@ def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices, 
     report_lines.append("  (multi-condition rules with >55% win rate, min 20 occurrences)")
     report_lines.append("=" * 70)
 
+    # Collect all feature names used in patterns for glossary
+    used_features = set()
+
     for idx, p in enumerate(patterns, 1):
-        report_lines.append(f"\n  Pattern #{idx}: {p['direction']} — {p['win_rate']:.0%} win rate ({p['n_wins']}/{p['n_trades']} trades)")
+        report_lines.append(f"\n  Pattern #{idx}: {p['direction']} -- {p['win_rate']:.0%} win rate ({p['n_wins']}/{p['n_trades']} trades)")
         report_lines.append(f"  When:")
         for cond in p['conditions']:
-            report_lines.append(f"    • {cond}")
-        report_lines.append(f"  → {p['win_rate']:.0%} chance of {p['direction'].lower()} continuation")
+            report_lines.append(f"    * {cond}")
+            # Extract feature name from condition description
+            for fname in feature_cols:
+                if fname in cond:
+                    used_features.add(fname)
+                    break
+        report_lines.append(f"  -> {p['win_rate']:.0%} chance of {p['direction'].lower()} continuation")
+
+    # Add glossary of terms used
+    report_lines.append(f"\n{'='*70}")
+    report_lines.append("  GLOSSARY: What each term means and how it is calculated")
+    report_lines.append("=" * 70)
+    for fname in sorted(used_features):
+        desc = _get_feature_description(fname)
+        if desc:
+            report_lines.append(f"\n  {fname}")
+            report_lines.append(f"    {desc}")
 
     report_lines.append(f"\n{'='*70}")
 
@@ -730,6 +748,122 @@ def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices, 
     json_path = os.path.join(output_dir, 'trading_patterns.json')
     with open(json_path, 'w') as f:
         json.dump({'patterns': patterns, 'generated_at': datetime.now().isoformat()}, f, indent=2)
+
+
+def _get_feature_description(fname):
+    """Return a human-readable description of how a feature is calculated."""
+    descriptions = {
+        # CVD features
+        'cvd': "Cumulative Volume Delta: running sum of (buy_volume - sell_volume) across all bars. "
+               "Positive = net buying over time, negative = net selling. Resets at session open (18:00 ET).",
+        'cvd_slope_3': "CVD slope over 3 bars: cvd.diff(3)/3. How fast CVD is changing in the short term.",
+        'cvd_slope_5': "CVD slope over 5 bars: cvd.diff(5)/5. Medium-term rate of change of cumulative delta.",
+        'cvd_slope_10': "CVD slope over 10 bars: cvd.diff(10)/10. Longer-term CVD momentum.",
+        'cvd_accel': "CVD acceleration: derivative of cvd_slope_3. Positive = buying accelerating, negative = selling accelerating.",
+        'cvd_accel_5': "CVD acceleration (5-bar): derivative of cvd_slope_5.",
+        'cvd_roc_3': "CVD rate of change over 3 bars: cvd.diff(3) / abs(cvd_3_bars_ago). Normalized CVD momentum.",
+        'cvd_roc_10': "CVD rate of change over 10 bars: normalized longer-term CVD shift.",
+        'cvd_bull_div': "CVD bullish divergence: price making new 5-bar highs but CVD is not. Signals hidden selling.",
+        'cvd_bear_div': "CVD bearish divergence: price making new 5-bar lows but CVD is not. Signals hidden buying.",
+
+        # Delta features
+        'delta': "Bar delta: buy_volume - sell_volume for this single bar. Positive = more buying, negative = more selling.",
+        'delta_pct': "Delta as % of total volume: delta / volume. Normalized measure of directional aggression.",
+        'delta_divergence': "1 if bar direction (mid vs open) disagrees with delta sign. Price went one way but flow went the other.",
+        'delta_sign': "Sign of delta: +1 (net buying), -1 (net selling), 0 (neutral).",
+        'delta_streak': "Consecutive bars with same delta direction. Longer streak = sustained one-sided flow.",
+
+        # Pressure ratios
+        'pressure_ratio_5': "5-bar buy/sell pressure: sum(buy_volume over 5 bars) / sum(sell_volume over 5 bars). "
+                           ">1.5 = strong buy pressure, <0.67 = strong sell pressure.",
+        'pressure_ratio_10': "10-bar buy/sell pressure: same as pressure_ratio_5 but over 10 bars. Longer-term aggression balance.",
+
+        # Imbalance features
+        'buy_imbalance_count': "Number of price levels in this bar where buy volume >= 3x the sell volume at the level below (footprint imbalance).",
+        'sell_imbalance_count': "Number of price levels where sell volume >= 3x the buy volume at the level above.",
+        'buy_imbalance_cluster': "Longest consecutive stack of buy imbalances (ascending prices). 3+ = strong buying wall.",
+        'sell_imbalance_cluster': "Longest consecutive stack of sell imbalances (descending prices). 3+ = strong selling wall.",
+        'imbalance_cluster_net': "buy_imbalance_cluster - sell_imbalance_cluster. Positive = buy-side stacking dominates.",
+        'imbalance_cluster_3': "Rolling 3-bar sum of imbalance_cluster_net. Short-term stacking trend.",
+        'imbalance_cluster_5': "Rolling 5-bar sum of imbalance_cluster_net. Medium-term stacking trend.",
+        'imbalance_strength': "Rolling 5-bar sum of (buy_imbalance_count - sell_imbalance_count). Overall imbalance bias.",
+        'net_imbalance': "buy_imbalance_count - sell_imbalance_count for this bar. Positive = more buy imbalances.",
+
+        # Multi-timeframe
+        'tf5_range': "Price range (high-low) over last 5 bars. Measures short-term volatility expansion.",
+        'tf5_delta_sum': "Sum of delta over last 5 bars. Net order flow direction over ~5 minutes.",
+        'tf5_vol_sum': "Total volume over last 5 bars.",
+        'tf5_imbalance': "Mean flow_imbalance over last 5 bars. Smoothed directional bias.",
+        'tf5_absorption': "Mean absorption over last 5 bars.",
+        'tf5_intensity': "Mean trade intensity over last 5 bars.",
+        'tf5_imb_cluster_sum': "Rolling 5-bar sum of imbalance_cluster_net.",
+        'tf15_range': "Price range over last 15 bars (~15 min). Higher timeframe volatility context.",
+        'tf15_delta_sum': "Sum of delta over last 15 bars. Net flow on a higher timeframe.",
+        'tf15_vol_sum': "Total volume over last 15 bars. Activity level on higher timeframe.",
+        'tf15_imbalance': "Mean flow_imbalance over last 15 bars. Higher-timeframe directional bias.",
+        'tf15_absorption': "Mean absorption over last 15 bars. Sustained trapping activity.",
+        'tf15_intensity': "Mean trade intensity (events/sec) over last 15 bars.",
+        'tf15_imb_cluster_sum': "Rolling 15-bar sum of imbalance_cluster_net. Are imbalance clusters consistently one-sided?",
+
+        # Flow features
+        'flow_imbalance': "Per-bar order flow imbalance: (buy_vol - sell_vol) / total_vol. Ranges -1 to +1.",
+        'flow_accel': "Flow imbalance acceleration: flow_imbalance.diff(). Positive = flow turning more bullish.",
+        'flow_accel_3': "Flow imbalance acceleration over 3 bars.",
+        'roll_3_flow_imb': "Rolling 3-bar mean of flow_imbalance. Short-term directional flow.",
+        'roll_5_flow_imb': "Rolling 5-bar mean of flow_imbalance.",
+        'roll_10_flow_imb': "Rolling 10-bar mean of flow_imbalance. Longer-term flow trend.",
+
+        # Volume/Intensity
+        'volume': "Total contracts traded in this bar.",
+        'vol_surge': "Current volume / 20-bar average volume. >2 = volume spike.",
+        'vol_ma_20': "20-bar moving average of volume. Baseline activity level.",
+        'intensity': "Trade events per second in this bar. High = fast market.",
+        'intensity_surge': "Current intensity / 10-bar mean intensity. >2 = sudden speed increase.",
+        'intensity_accel': "Change in intensity from previous bar.",
+        'intensity_accel_3': "Change in intensity over 3 bars.",
+        'roll_3_vol_ratio': "Current volume / 3-bar rolling mean volume.",
+        'roll_5_vol_ratio': "Current volume / 5-bar rolling mean volume.",
+        'roll_10_vol_ratio': "Current volume / 10-bar rolling mean volume.",
+        'roll_3_intensity': "Rolling 3-bar mean of trade intensity.",
+        'roll_5_intensity': "Rolling 5-bar mean of trade intensity.",
+        'roll_10_intensity': "Rolling 10-bar mean of trade intensity.",
+
+        # Absorption
+        'absorption': "Volume per tick / 20-bar mean of volume per tick. "
+                     ">1.5 = high volume absorbed in small range (trapped traders, institutional activity).",
+        'vol_per_tick': "Volume divided by number of ticks in bar range. High = lots of contracts at each price level.",
+
+        # Volatility/Range
+        'bar_range': "High - low of this bar in points.",
+        'atr_5': "Average True Range over 5 bars. Short-term volatility.",
+        'atr_14': "Average True Range over 14 bars. Standard volatility measure.",
+        'atr_ratio': "atr_5 / atr_14. >1 = volatility expanding, <1 = contracting.",
+        'range_vs_atr': "bar_range / atr_14. >1.5 = unusually large bar, <0.5 = unusually small.",
+        'range_ma_5': "5-bar mean of bar_range.",
+        'range_ma_20': "20-bar mean of bar_range. Baseline range.",
+        'consolidation': "range_ma_5 / range_ma_20. <0.7 = narrowing (consolidation), >1.3 = expanding (breakout).",
+        'roll_3_volatility': "Rolling 3-bar std of 1-bar returns.",
+        'roll_5_volatility': "Rolling 5-bar std of 1-bar returns.",
+        'roll_10_volatility': "Rolling 10-bar std of 1-bar returns. Longer-term vol regime.",
+
+        # Time
+        'hour_sin': "Cyclical time encoding (sin). Captures time-of-day patterns without hard boundaries.",
+        'hour_cos': "Cyclical time encoding (cos). Together with hour_sin, encodes the 24-hour cycle.",
+        'session_rth': "1 if within Regular Trading Hours (9:30 AM - 4:00 PM ET), 0 otherwise.",
+        'session_premarket': "1 if premarket (4:00 AM - 9:30 AM ET).",
+        'session_overnight': "1 if overnight session (6:00 PM - 4:00 AM ET).",
+
+        # Other
+        'large_trade_ratio': "Largest single transaction / total bar volume. High = institutional block trade.",
+        'wide_spread_frac': "Fraction of trades in bar with bid-ask spread >= 2 ticks. High = low liquidity.",
+        'max_buy_run': "Longest consecutive buy ticks within this bar.",
+        'max_sell_run': "Longest consecutive sell ticks within this bar.",
+        'gap_from_prev_high': "Open price - previous bar's high. Positive = gapped above prior high.",
+        'gap_from_prev_low': "Open price - previous bar's low. Negative = gapped below prior low.",
+        'max_events_per_tick': "Max number of trade events at any single price level in this bar.",
+        'level_concentration': "Fraction of total volume at the most-traded price level. High = heavy activity at one price.",
+    }
+    return descriptions.get(fname, None)
 
 
 def _build_conditions(X, feature_cols):
