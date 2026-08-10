@@ -24,8 +24,18 @@ import numpy as np
 import pandas as pd
 
 DOTNET_EPOCH = datetime(1, 1, 1)
+UNIX_EPOCH = datetime(1970, 1, 1)
 TICK_RECORD_SIZE = 57
 TICK_STRUCT = struct.Struct('<q3d6IB')
+
+
+def _naive_to_unix(dt):
+    """Convert naive datetime to unix seconds matching the viewer's tick-to-time conversion."""
+    if hasattr(dt, 'to_pydatetime'):
+        dt = dt.to_pydatetime()
+    if dt.tzinfo is not None:
+        dt = dt.replace(tzinfo=None)
+    return int((dt - UNIX_EPOCH).total_seconds())
 
 
 def ticks_to_datetime(ticks):
@@ -96,8 +106,8 @@ def trades_to_json(trades_df, output_path):
         entry_time = pd.Timestamp(row['entry_time'])
         exit_time = pd.Timestamp(row['exit_time'])
 
-        entry_unix = int(entry_time.timestamp()) if entry_time.tzinfo else int(entry_time.tz_localize('UTC').timestamp())
-        exit_unix = int(exit_time.timestamp()) if exit_time.tzinfo else int(exit_time.tz_localize('UTC').timestamp())
+        entry_unix = _naive_to_unix(entry_time)
+        exit_unix = _naive_to_unix(exit_time)
 
         pnl = float(row.get('pnl_points', 0))
         result = 'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH')
@@ -228,8 +238,8 @@ def _generate_per_trade(all_records, trades_path, output_dir, context_bars):
             for rec_idx in range(i_start, i_end):
                 f.write(all_records[rec_idx][1])
 
-        entry_unix = int(entry_time.tz_localize('UTC').timestamp()) if entry_time.tzinfo is None else int(entry_time.timestamp())
-        exit_unix = int(exit_time.tz_localize('UTC').timestamp()) if exit_time.tzinfo is None else int(exit_time.timestamp())
+        entry_unix = _naive_to_unix(entry_time)
+        exit_unix = _naive_to_unix(exit_time)
         pnl = float(row.get('pnl_points', 0))
         trade_json = {
             'trades': [{

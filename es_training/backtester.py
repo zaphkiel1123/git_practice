@@ -148,9 +148,9 @@ class Backtester:
         timestamps = bars.index
         rth_mask = bars['is_rth'].values.astype(bool) if 'is_rth' in bars.columns else is_rth(timestamps).values
 
-        # Detect session end (15:30 ET)
+        # Detect session end (15:25 ET)
         if timestamps.tz is None:
-            ts_et = timestamps.tz_localize('UTC').tz_convert('America/New_York')
+            ts_et = timestamps.tz_localize('America/Chicago').tz_convert('America/New_York')
         else:
             ts_et = timestamps.tz_convert('America/New_York')
         session_end_mask = (ts_et.hour == 15) & (ts_et.minute >= 25)
