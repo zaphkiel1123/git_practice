@@ -722,7 +722,7 @@ def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices, 
 
     # Save to file
     report_path = os.path.join(output_dir, 'trading_patterns.txt')
-    with open(report_path, 'w') as f:
+    with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report_text)
     print(f"\n  Pattern report → {report_path}")
 
