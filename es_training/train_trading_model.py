@@ -150,6 +150,28 @@ def add_microstructure_features(bars, raw_df=None):
     bars['gap_from_prev_high'] = bars['open'] - bars['high'].shift(1)
     bars['gap_from_prev_low'] = bars['open'] - bars['low'].shift(1)
 
+    # CVD-vs-range divergence: CVD moving but price stuck (setup detection)
+    bars['cvd_range_div_5'] = bars['cvd_slope_5'].abs() / bars['bar_range'].rolling(5).mean().clip(lower=TICK_SIZE)
+    bars['cvd_range_div_10'] = bars['cvd_slope_10'].abs() / bars['bar_range'].rolling(10).mean().clip(lower=TICK_SIZE)
+
+    # Direction context: is CVD pushing with or against recent flow?
+    # Positive = CVD and flow agree (strength signal), Negative = disagree (absorption signal)
+    bars['cvd_flow_alignment'] = np.sign(bars['cvd_slope_5']) * bars['flow_imbalance']
+
+    # Absorption vs strength classifier inputs:
+    # When cvd_range_div is high, these help determine outcome:
+    # - If opposing side's imbalance clusters are forming → absorption (reversal)
+    # - If same-side pressure ratio stays dominant → strength (continuation)
+    bars['cvd_div_x_pressure'] = bars['cvd_range_div_5'] * (bars['pressure_ratio_5'] - 1.0)
+    # Positive = CVD diverging + buy pressure dominant → bullish strength
+    # Negative = CVD diverging + sell pressure dominant → bearish strength
+
+    bars['cvd_div_x_absorption'] = bars['cvd_range_div_5'] * bars['absorption']
+    # High = CVD diverging + high absorption → trapped traders, likely reversal
+
+    bars['cvd_div_x_imbalance'] = bars['cvd_range_div_5'] * bars.get('net_imbalance', 0)
+    # CVD diverging + footprint imbalance stacking → confirms direction (strength)
+
     return bars
 
 
@@ -884,6 +906,12 @@ def _get_feature_description(fname):
         'gap_from_prev_low': "Open price - previous bar's low. Negative = gapped below prior low.",
         'max_events_per_tick': "Max number of trade events at any single price level in this bar.",
         'level_concentration': "Fraction of total volume at the most-traded price level. High = heavy activity at one price.",
+        'cvd_range_div_5': "abs(CVD slope 5-bar) / 5-bar avg range. High = CVD moving fast but price stuck. Setup forming.",
+        'cvd_range_div_10': "Same as cvd_range_div_5 but over 10 bars. Longer-term divergence.",
+        'cvd_flow_alignment': "sign(cvd_slope) * flow_imbalance. Positive = CVD and flow agree (strength). Negative = disagree (absorption).",
+        'cvd_div_x_pressure': "cvd_range_div * (pressure_ratio - 1). High positive = CVD stuck + buy dominant (bullish strength). High negative = sell dominant (bearish strength).",
+        'cvd_div_x_absorption': "cvd_range_div * absorption. High = CVD diverging while volume is being absorbed. Signals trapped traders, likely reversal.",
+        'cvd_div_x_imbalance': "cvd_range_div * net_imbalance. CVD stuck + footprint imbalance stacking same direction = confirms strength/continuation.",
     }
     return descriptions.get(fname, None)
 
