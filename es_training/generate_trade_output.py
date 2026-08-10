@@ -122,6 +122,7 @@ def trades_to_json(trades_df, output_path):
             'exit_price': float(row['exit_price']),
             'exit_reason': row['exit_reason'],
             'entry_reason': str(row.get('entry_reason', '')),
+            'pattern': str(row.get('pattern', '')),
             'pnl_points': pnl,
             'result': result,
         })
@@ -231,7 +232,11 @@ def _generate_per_trade(all_records, trades_path, output_dir, context_bars):
             continue
 
         entry_str = entry_time.strftime('%Y%m%d_%H%M')
-        prefix = f"trade_{idx+1:04d}_{entry_str}_{direction[0]}_{result}"
+        pattern_tag = str(row.get('pattern', '')).replace('%', 'pct')
+        if pattern_tag:
+            prefix = f"trade_{idx+1:04d}_{entry_str}_{direction[0]}_{result}_{pattern_tag}"
+        else:
+            prefix = f"trade_{idx+1:04d}_{entry_str}_{direction[0]}_{result}"
 
         data_path = os.path.join(trades_dir, f"{prefix}.data")
         with open(data_path, 'wb') as f:
@@ -252,6 +257,7 @@ def _generate_per_trade(all_records, trades_path, output_dir, context_bars):
                 'exit_price': float(row['exit_price']),
                 'exit_reason': row['exit_reason'],
                 'entry_reason': str(row.get('entry_reason', '')),
+                'pattern': str(row.get('pattern', '')),
                 'pnl_points': pnl,
                 'result': 'WIN' if pnl > 0 else ('LOSS' if pnl < 0 else 'SCRATCH'),
             }],

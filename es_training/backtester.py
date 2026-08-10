@@ -36,7 +36,7 @@ COMMISSION = 2.50   # per side per contract
 
 
 class Trade:
-    def __init__(self, entry_time, entry_price, direction, sl_price, tp_price, bar_idx, entry_reason=''):
+    def __init__(self, entry_time, entry_price, direction, sl_price, tp_price, bar_idx, entry_reason='', pattern=''):
         self.entry_time = entry_time
         self.entry_price = entry_price
         self.direction = direction  # +1 long, -1 short
@@ -44,6 +44,7 @@ class Trade:
         self.tp_price = tp_price
         self.bar_idx = bar_idx
         self.entry_reason = entry_reason
+        self.pattern = pattern
         self.exit_time = None
         self.exit_price = None
         self.exit_reason = None
@@ -69,6 +70,55 @@ class Backtester:
         self.sl_multiplier = sl_multiplier
         self.min_sl = min_sl
         self.max_sl = max_sl
+        self.patterns = []
+
+    def load_patterns(self, patterns_path):
+        """Load trading patterns from JSON for trade tagging."""
+        if os.path.isfile(patterns_path):
+            with open(patterns_path) as f:
+                data = json.load(f)
+            self.patterns = data.get('patterns', [])
+            print(f"  Loaded {len(self.patterns)} trading patterns")
+
+    def _match_pattern(self, X, direction):
+        """Find the best matching pattern for this trade entry."""
+        dir_label = 'LONG' if direction == 1 else 'SHORT'
+        feature_vals = {name: X[0, i] for i, name in enumerate(self.feature_cols)}
+
+        best = None
+        best_wr = 0
+        for p in self.patterns:
+            if p['direction'] != dir_label:
+                continue
+            rules = p.get('rules', [])
+            if not rules:
+                continue
+            match = True
+            for rule in rules:
+                feat = rule.get('feature', '')
+                op = rule.get('op', '')
+                thresh = rule.get('threshold', 0)
+                val = feature_vals.get(feat)
+                if val is None:
+                    match = False
+                    break
+                if op == '>' and not (val > thresh):
+                    match = False
+                elif op == '<' and not (val < thresh):
+                    match = False
+                elif op == '>=' and not (val >= thresh):
+                    match = False
+                elif op == '<=' and not (val <= thresh):
+                    match = False
+                elif op == '==' and not (val == thresh):
+                    match = False
+            if match and p['win_rate'] > best_wr:
+                best = p
+                best_wr = p['win_rate']
+
+        if best:
+            return f"P{self.patterns.index(best)+1}_{best['win_rate']:.0%}"
+        return ''
 
     def _get_entry_reason(self, X, direction):
         """Explain why this trade was taken using per-prediction feature contributions."""
@@ -287,6 +337,7 @@ class Backtester:
                     tp_price=tp_price,
                     bar_idx=i,
                     entry_reason=self._get_entry_reason(X, pred_direction),
+                    pattern=self._match_pattern(X, pred_direction),
                 )
 
             equity_curve.append({'time': current_time, 'equity': equity})
@@ -391,6 +442,7 @@ def trades_to_dataframe(trades):
             'tp_price': t.tp_price,
             'exit_reason': t.exit_reason,
             'entry_reason': t.entry_reason,
+            'pattern': t.pattern,
             'pnl_points': t.pnl_points,
             'pnl_dollars': t.pnl_dollars,
             'bars_held': t.bars_held,
@@ -498,6 +550,9 @@ def main():
         quality_threshold=args.quality_threshold,
         max_hold_bars=args.max_hold,
     )
+
+    patterns_path = os.path.join(args.models_dir, 'trading_patterns.json')
+    bt.load_patterns(patterns_path)
 
     print("Running backtest...")
     trades, equity_curve = bt.run(bars)

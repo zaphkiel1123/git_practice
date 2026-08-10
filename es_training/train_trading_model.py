@@ -713,6 +713,7 @@ def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices, 
                             patterns.append({
                                 'direction': dir_label,
                                 'conditions': [cond_i['desc'], cond_j['desc']],
+                                'rules': [cond_i.get('rule', {}), cond_j.get('rule', {})],
                                 'win_rate': win_rate,
                                 'n_trades': int(n_trades),
                                 'n_wins': int(n_wins),
@@ -888,9 +889,11 @@ def _get_feature_description(fname):
 
 
 def _build_conditions(X, feature_cols):
-    """Build testable conditions for each feature using meaningful thresholds."""
+    """Build testable conditions with machine-readable rules for each feature."""
     conditions = {}
-    n = len(X)
+
+    def _c(mask, desc, fname, op, thresh):
+        return {'mask': mask, 'desc': desc, 'rule': {'feature': fname, 'op': op, 'threshold': float(thresh)}}
 
     for fi, fname in enumerate(feature_cols):
         vals = X[:, fi]
@@ -901,63 +904,63 @@ def _build_conditions(X, feature_cols):
             med = np.median(vals)
             p75 = np.percentile(vals, 75)
             p25 = np.percentile(vals, 25)
-            conditions[fi].append({'mask': vals > p75, 'desc': f'{fname} elevated (>{p75:.0f}, top 25%)'})
-            conditions[fi].append({'mask': vals < p25, 'desc': f'{fname} depressed (<{p25:.0f}, bottom 25%)'})
-            conditions[fi].append({'mask': vals > 0, 'desc': f'{fname} positive (buyers leading)'})
-            conditions[fi].append({'mask': vals < 0, 'desc': f'{fname} negative (sellers leading)'})
+            conditions[fi].append(_c(vals > p75, f'{fname} elevated (>{p75:.0f}, top 25%)', fname, '>', p75))
+            conditions[fi].append(_c(vals < p25, f'{fname} depressed (<{p25:.0f}, bottom 25%)', fname, '<', p25))
+            conditions[fi].append(_c(vals > 0, f'{fname} positive (buyers leading)', fname, '>', 0))
+            conditions[fi].append(_c(vals < 0, f'{fname} negative (sellers leading)', fname, '<', 0))
 
         elif 'imbalance' in fname:
             if 'cluster' in fname:
-                conditions[fi].append({'mask': vals >= 3, 'desc': f'{fname} >= 3 (strong cluster)'})
-                conditions[fi].append({'mask': vals <= -3, 'desc': f'{fname} <= -3 (strong sell cluster)'})
+                conditions[fi].append(_c(vals >= 3, f'{fname} >= 3 (strong cluster)', fname, '>=', 3))
+                conditions[fi].append(_c(vals <= -3, f'{fname} <= -3 (strong sell cluster)', fname, '<=', -3))
             else:
                 p75 = np.percentile(vals, 75)
                 p25 = np.percentile(vals, 25)
-                conditions[fi].append({'mask': vals > p75, 'desc': f'{fname} high (>{p75:.1f})'})
-                conditions[fi].append({'mask': vals < p25, 'desc': f'{fname} low (<{p25:.1f})'})
+                conditions[fi].append(_c(vals > p75, f'{fname} high (>{p75:.1f})', fname, '>', p75))
+                conditions[fi].append(_c(vals < p25, f'{fname} low (<{p25:.1f})', fname, '<', p25))
 
         elif 'delta' in fname:
             p80 = np.percentile(vals, 80)
             p20 = np.percentile(vals, 20)
-            conditions[fi].append({'mask': vals > p80, 'desc': f'{fname} strongly positive (>{p80:.0f})'})
-            conditions[fi].append({'mask': vals < p20, 'desc': f'{fname} strongly negative (<{p20:.0f})'})
-            conditions[fi].append({'mask': vals > 0, 'desc': f'{fname} > 0 (net buying)'})
-            conditions[fi].append({'mask': vals < 0, 'desc': f'{fname} < 0 (net selling)'})
+            conditions[fi].append(_c(vals > p80, f'{fname} strongly positive (>{p80:.0f})', fname, '>', p80))
+            conditions[fi].append(_c(vals < p20, f'{fname} strongly negative (<{p20:.0f})', fname, '<', p20))
+            conditions[fi].append(_c(vals > 0, f'{fname} > 0 (net buying)', fname, '>', 0))
+            conditions[fi].append(_c(vals < 0, f'{fname} < 0 (net selling)', fname, '<', 0))
 
         elif 'absorption' in fname:
             p75 = np.percentile(vals, 75)
-            conditions[fi].append({'mask': vals > p75, 'desc': f'high {fname} (>{p75:.1f}x, trapped traders)'})
-            conditions[fi].append({'mask': vals > 2.0, 'desc': f'{fname} > 2x (extreme absorption)'})
+            conditions[fi].append(_c(vals > p75, f'high {fname} (>{p75:.1f}x, trapped traders)', fname, '>', p75))
+            conditions[fi].append(_c(vals > 2.0, f'{fname} > 2x (extreme absorption)', fname, '>', 2.0))
 
         elif 'divergence' in fname or '_div' in fname:
-            conditions[fi].append({'mask': vals == 1, 'desc': f'{fname} active (price/flow disagree)'})
+            conditions[fi].append(_c(vals == 1, f'{fname} active (price/flow disagree)', fname, '==', 1))
 
         elif 'intensity' in fname or 'surge' in fname:
             p75 = np.percentile(vals, 75)
-            conditions[fi].append({'mask': vals > p75, 'desc': f'{fname} surging (>{p75:.1f})'})
-            conditions[fi].append({'mask': vals > 2.0, 'desc': f'{fname} > 2x (acceleration)'})
+            conditions[fi].append(_c(vals > p75, f'{fname} surging (>{p75:.1f})', fname, '>', p75))
+            conditions[fi].append(_c(vals > 2.0, f'{fname} > 2x (acceleration)', fname, '>', 2.0))
 
         elif 'pressure' in fname:
-            conditions[fi].append({'mask': vals > 1.5, 'desc': f'{fname} > 1.5 (strong buy pressure)'})
-            conditions[fi].append({'mask': vals < 0.67, 'desc': f'{fname} < 0.67 (strong sell pressure)'})
+            conditions[fi].append(_c(vals > 1.5, f'{fname} > 1.5 (strong buy pressure)', fname, '>', 1.5))
+            conditions[fi].append(_c(vals < 0.67, f'{fname} < 0.67 (strong sell pressure)', fname, '<', 0.67))
 
         elif 'consolidation' in fname:
-            conditions[fi].append({'mask': vals < 0.7, 'desc': 'range contracting (consolidation)'})
-            conditions[fi].append({'mask': vals > 1.3, 'desc': 'range expanding (breakout)'})
+            conditions[fi].append(_c(vals < 0.7, 'range contracting (consolidation)', fname, '<', 0.7))
+            conditions[fi].append(_c(vals > 1.3, 'range expanding (breakout)', fname, '>', 1.3))
 
         elif 'flow' in fname:
             p75 = np.percentile(vals, 75)
             p25 = np.percentile(vals, 25)
-            conditions[fi].append({'mask': vals > p75, 'desc': f'{fname} bullish (>{p75:.3f})'})
-            conditions[fi].append({'mask': vals < p25, 'desc': f'{fname} bearish (<{p25:.3f})'})
+            conditions[fi].append(_c(vals > p75, f'{fname} bullish (>{p75:.3f})', fname, '>', p75))
+            conditions[fi].append(_c(vals < p25, f'{fname} bearish (<{p25:.3f})', fname, '<', p25))
 
         else:
             # Generic: above/below median, extreme quartiles
             p75 = np.percentile(vals, 75)
             p25 = np.percentile(vals, 25)
             if not np.isnan(p75) and p75 != p25:
-                conditions[fi].append({'mask': vals > p75, 'desc': f'{fname} high (>{p75:.2f})'})
-                conditions[fi].append({'mask': vals < p25, 'desc': f'{fname} low (<{p25:.2f})'})
+                conditions[fi].append(_c(vals > p75, f'{fname} high (>{p75:.2f})', fname, '>', p75))
+                conditions[fi].append(_c(vals < p25, f'{fname} low (<{p25:.2f})', fname, '<', p25))
 
     return conditions
 
