@@ -2,11 +2,45 @@
 ./run_trading.sh ./data 1min 1.5
 
 # Or step by step:
-python3 train_trading_model.py ./data --rr 1.5
-python3 backtester.py ./data/models --rr 1.5
-python3 explain_model.py ./data/models --trades ./data/models/backtest_trades.csv
-python3 generate_trade_output.py ./data/models
+python train_trading_model.py ./data --rr 1.5
+python backtester.py ./data/models --rr 1.5
+python explain_model.py ./data/models --trades ./data/models/backtest_trades.csv
+python generate_trade_output.py ./data/models
 
 # Live signals:
-python3 live_signal.py ./data/models --file new_session.data
-python3 live_signal.py ./data/models --watch /path/to/live/
+python live_signal.py ./data/models --file new_session.data
+python live_signal.py ./data/models --watch /path/to/live/
+
+# Pipeline data flow:
+#
+# train_trading_model.py
+#   consumes: ./data/*.data (57-byte tick binary files)
+#   generates: ./data/models/signal_model.joblib
+#              ./data/models/volatility_model.joblib
+#              ./data/models/quality_model.joblib
+#              ./data/models/training_meta.json
+#              ./data/models/training_features.parquet (or .csv)
+#
+# backtester.py
+#   consumes: ./data/models/signal_model.joblib
+#             ./data/models/volatility_model.joblib
+#             ./data/models/quality_model.joblib
+#             ./data/models/training_meta.json (feature column list)
+#             ./data/models/training_features.parquet (or --data for raw .data files)
+#   generates: ./data/models/backtest_trades.csv
+#              ./data/models/equity_curve.csv
+#              ./data/models/backtest_metrics.json
+#
+# explain_model.py
+#   consumes: ./data/models/signal_model.joblib
+#             ./data/models/training_meta.json
+#             ./data/models/training_features.parquet
+#             ./data/models/backtest_trades.csv (--trades)
+#   generates: ./data/models/factor_analysis.json
+#              ./data/models/factor_report.txt
+#
+# generate_trade_output.py
+#   consumes: ./data/models/training_features.parquet (bars with OHLCV)
+#             ./data/models/backtest_trades.csv
+#   generates: ./data/models/viewer_output/bars.data (60-byte minute binary for viewer)
+#              ./data/models/viewer_output/trades.json (marker overlay for viewer)
