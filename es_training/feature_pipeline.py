@@ -22,7 +22,7 @@ import argparse
 import glob
 import time
 from datetime import datetime, timedelta
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -96,7 +96,7 @@ def decode_file_to_dataframe(filepath):
 # Feature Engineering
 # ============================================================
 
-def compute_window_features(df, window='1min'):
+def compute_window_features(df, window='1min', parallel_levels=True):
     """
     Aggregate tick-level data into time-windowed bars with features.
 
@@ -158,7 +158,7 @@ def compute_window_features(df, window='1min'):
     bars['max_sell_run'] = resampled['direction'].apply(_max_consecutive, target=-1)
 
     # Per-level imbalance, transaction speed features (computed in parallel chunks)
-    extra_features = _compute_level_features_parallel(df, window)
+    extra_features = _compute_level_features_parallel(df, window, parallel_levels=parallel_levels)
     for col in extra_features.columns:
         bars[col] = extra_features[col]
     bars['net_imbalance'] = bars['buy_imbalance_count'] - bars['sell_imbalance_count']
@@ -169,10 +169,110 @@ def compute_window_features(df, window='1min'):
     return bars
 
 
+def _file_to_bars_task(args):
+    """Worker: decode one .data file and resample to bars (never concat ticks)."""
+    fp, window, parallel_levels = args
+    df = decode_file_to_dataframe(fp)
+    n_ticks = len(df)
+    if n_ticks == 0:
+        return os.path.basename(fp), 0, None
+    bars = compute_window_features(df, window=window, parallel_levels=parallel_levels)
+    return os.path.basename(fp), n_ticks, bars
+
+
+def _load_files_to_bars_prefetch(files, window):
+    """Threaded pipeline: prefetch next file while resampling the current one."""
+    all_bars = []
+    total_ticks = 0
+
+    with ThreadPoolExecutor(max_workers=1) as loader:
+        pending = loader.submit(decode_file_to_dataframe, files[0])
+        for i, fp in enumerate(files):
+            df = pending.result()
+            if i + 1 < len(files):
+                pending = loader.submit(decode_file_to_dataframe, files[i + 1])
+
+            n_ticks = len(df)
+            total_ticks += n_ticks
+            print(f"  {os.path.basename(fp)}: {n_ticks:,} ticks")
+            if n_ticks == 0:
+                continue
+
+            print(f"    Computing {window} bars...")
+            file_bars = compute_window_features(df, window=window)
+            del df
+            all_bars.append(file_bars)
+            print(f"    -> {len(file_bars):,} bars")
+
+    return all_bars, total_ticks
+
+
+def load_files_to_bars(data_dir, window='1min', workers=0):
+    """
+    Load .data files and aggregate to bars without holding all ticks in memory.
+
+    Each file is processed independently: load -> resample -> keep bars only.
+    Ticks are never concatenated across files.
+
+    workers:
+      0 (default) — threaded prefetch pipeline (load N+1 while resampling N)
+      1           — sequential, no prefetch
+      >1          — process pool, one file per worker (parallel across files)
+    """
+    pattern = os.path.join(data_dir, '*.data')
+    files = sorted(glob.glob(pattern))
+    if not files:
+        print(f"ERROR: No .data files in {data_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Found {len(files)} data file(s)")
+    t0 = time.time()
+    all_bars = []
+    total_ticks = 0
+
+    if workers > 1:
+        import multiprocessing
+        n_workers = min(workers, len(files), multiprocessing.cpu_count() or 1)
+        print(f"  Parallel mode: {n_workers} workers")
+        tasks = [(fp, window, False) for fp in files]
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            for name, n_ticks, file_bars in pool.map(_file_to_bars_task, tasks):
+                total_ticks += n_ticks
+                print(f"  {name}: {n_ticks:,} ticks")
+                if file_bars is not None:
+                    all_bars.append(file_bars)
+                    print(f"    -> {len(file_bars):,} bars")
+    elif workers == 0:
+        print("  Prefetch pipeline: load next file while resampling current")
+        all_bars, total_ticks = _load_files_to_bars_prefetch(files, window)
+    else:
+        for fp in files:
+            df = decode_file_to_dataframe(fp)
+            n_ticks = len(df)
+            total_ticks += n_ticks
+            print(f"  {os.path.basename(fp)}: {n_ticks:,} ticks")
+            if n_ticks == 0:
+                continue
+            print(f"    Computing {window} bars...")
+            file_bars = compute_window_features(df, window=window)
+            del df
+            all_bars.append(file_bars)
+            print(f"    -> {len(file_bars):,} bars")
+
+    if not all_bars:
+        print("ERROR: No bars produced from data files", file=sys.stderr)
+        sys.exit(1)
+
+    bars = pd.concat(all_bars).sort_index()
+    bars = bars[~bars.index.duplicated(keep='first')]
+    print(f"Total ticks: {total_ticks:,} | Bars: {len(bars):,} [{time.time()-t0:.1f}s]")
+    return bars
+
+
 TICK_SIZE_FP = 0.25
 
 
-def _compute_level_features_parallel(df, window):
+def _compute_level_features_parallel(df, window, parallel_levels=True):
     """Compute imbalance + transaction speed features using chunked multiprocessing."""
     import os as _os
 
@@ -187,12 +287,14 @@ def _compute_level_features_parallel(df, window):
     chunk_size = max(1, len(groups) // n_workers)
     chunks = [groups[i:i + chunk_size] for i in range(0, len(groups), chunk_size)]
 
-    with ProcessPoolExecutor(max_workers=n_workers) as pool:
-        results = list(pool.map(_process_bar_chunk, chunks))
-
     records = []
-    for chunk_records in results:
-        records.extend(chunk_records)
+    if parallel_levels and len(chunks) > 1:
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            for chunk_records in pool.map(_process_bar_chunk, chunks):
+                records.extend(chunk_records)
+    else:
+        for chunk in chunks:
+            records.extend(_process_bar_chunk(chunk))
 
     result = pd.DataFrame(records).set_index('timestamp').sort_index()
     return result
@@ -228,6 +330,7 @@ def _process_bar_chunk(chunk):
             'sell_imbalance_cluster': sell_cluster,
             'max_events_per_tick': max_events,
             'level_concentration': concentration,
+            '_vol_profile': dict(vol_by_price),
         })
     return records
 
@@ -365,6 +468,133 @@ def add_time_features(bars):
 
 
 # ============================================================
+# Volume Profile & Value Area
+# ============================================================
+
+def compute_value_area(vol_by_price, value_area_pct=0.70, tick_size=TICK_SIZE_FP):
+    """Compute POC, VAH, VAL from a volume-by-price histogram.
+
+    POC = price level with highest volume.
+    Value Area = contiguous range from POC containing value_area_pct of total volume.
+    VAH/VAL = upper/lower boundaries of the value area.
+    """
+    if not vol_by_price:
+        return np.nan, np.nan, np.nan
+
+    total_vol = sum(vol_by_price.values())
+    if total_vol <= 0:
+        return np.nan, np.nan, np.nan
+
+    poc = max(vol_by_price, key=vol_by_price.get)
+
+    target_vol = total_vol * value_area_pct
+    captured = vol_by_price[poc]
+    vah = poc
+    val = poc
+
+    while captured < target_vol:
+        vol_above = vol_by_price.get(vah + tick_size, 0)
+        vol_below = vol_by_price.get(val - tick_size, 0)
+
+        if vol_above == 0 and vol_below == 0:
+            break
+
+        if vol_above >= vol_below:
+            vah += tick_size
+            captured += vol_above
+        else:
+            val -= tick_size
+            captured += vol_below
+
+    return poc, vah, val
+
+
+def merge_volume_profiles(profile_list):
+    """Merge multiple volume-by-price dicts into one cumulative histogram."""
+    merged = {}
+    for prof in profile_list:
+        if not isinstance(prof, dict):
+            continue
+        for price, vol in prof.items():
+            merged[price] = merged.get(price, 0) + vol
+    return merged
+
+
+def add_value_area_features(bars, lookback=10, value_area_pct=0.70, min_volume=50):
+    """Add features comparing current price to rolling cumulative volume profile.
+
+    At bar i, merges tick volume profiles from the previous `lookback` completed
+    bars [i-lookback, i-1] into a single histogram, computes POC/VAH/VAL, and
+    expresses current price position relative to those levels.
+    All features are strictly backward-looking (no data leakage).
+    """
+    if '_vol_profile' not in bars.columns:
+        return bars
+
+    profiles = bars['_vol_profile'].values
+    n = len(bars)
+    mid_prices = ((bars['high'] + bars['low']) / 2).values
+
+    poc_arr = np.full(n, np.nan)
+    vah_arr = np.full(n, np.nan)
+    val_arr = np.full(n, np.nan)
+    vol_at_price_arr = np.full(n, np.nan)
+    price_pct_arr = np.full(n, np.nan)
+
+    for i in range(lookback, n):
+        merged = merge_volume_profiles(profiles[i - lookback:i])
+        total_vol = sum(merged.values()) if merged else 0
+        if total_vol < min_volume or not merged:
+            continue
+
+        poc, vah, val_level = compute_value_area(merged, value_area_pct)
+        poc_arr[i] = poc
+        vah_arr[i] = vah
+        val_arr[i] = val_level
+
+        mid = mid_prices[i]
+        closest = min(merged.keys(), key=lambda p: abs(p - mid))
+        max_vol = max(merged.values())
+        vol_at_price_arr[i] = merged[closest] / max_vol if max_vol > 0 else 0
+        vol_below = sum(v for p, v in merged.items() if p <= mid)
+        price_pct_arr[i] = vol_below / total_vol
+
+    bars['va10_poc'] = poc_arr
+    bars['va10_vah'] = vah_arr
+    bars['va10_val'] = val_arr
+
+    if 'mid' not in bars.columns:
+        bars['mid'] = (bars['high'] + bars['low']) / 2
+
+    if 'atr_14' in bars.columns:
+        atr_safe = bars['atr_14'].clip(lower=TICK_SIZE_FP)
+    else:
+        atr_safe = (bars['high'] - bars['low']).rolling(14).mean().clip(lower=TICK_SIZE_FP)
+
+    bars['va10_price_vs_poc'] = (bars['mid'] - bars['va10_poc']) / atr_safe
+    bars['va10_price_vs_vah'] = (bars['mid'] - bars['va10_vah']) / atr_safe
+    bars['va10_price_vs_val'] = (bars['mid'] - bars['va10_val']) / atr_safe
+
+    va_valid = bars['va10_poc'].notna()
+    bars['va10_in_value_area'] = np.where(
+        va_valid,
+        ((mid_prices >= val_arr) & (mid_prices <= vah_arr)).astype(float),
+        np.nan
+    )
+    bars['va10_above_vah'] = np.where(
+        va_valid, (mid_prices > vah_arr).astype(float), np.nan
+    )
+    bars['va10_below_val'] = np.where(
+        va_valid, (mid_prices < val_arr).astype(float), np.nan
+    )
+    bars['va10_va_width'] = (bars['va10_vah'] - bars['va10_val']) / atr_safe
+    bars['va10_volume_at_price'] = vol_at_price_arr
+    bars['va10_price_percentile'] = price_pct_arr
+
+    return bars
+
+
+# ============================================================
 # Label Construction
 # ============================================================
 
@@ -462,6 +692,9 @@ def run_pipeline(data_dir, window='1min', horizon='5min', output=None):
           f"std={complete_bars['magnitude_label'].std():.3f}, "
           f"median={complete_bars['magnitude_label'].median():.3f}")
     print(f"{'='*60}")
+
+    # Drop internal columns not suitable for serialization
+    complete_bars = complete_bars.drop(columns=['_vol_profile'], errors='ignore')
 
     # Save output
     if output is None:

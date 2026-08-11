@@ -45,7 +45,7 @@ from sklearn.metrics import (
 )
 from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 
-from feature_pipeline import decode_file_to_dataframe, compute_window_features, add_rolling_features, add_time_features
+from feature_pipeline import decode_file_to_dataframe, compute_window_features, add_rolling_features, add_time_features, add_value_area_features, load_files_to_bars
 from labels import create_trade_labels, compute_atr, is_rth
 
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -123,6 +123,16 @@ def add_microstructure_features(bars, raw_df=None):
     # Volume surge detection
     bars['vol_ma_20'] = bars['volume'].rolling(20).mean()
     bars['vol_surge'] = bars['volume'] / bars['vol_ma_20'].clip(lower=1)
+
+    # Volume rate of change over 5 bars (trend direction)
+    bars['vol_roc_5'] = (
+        (bars['volume'] - bars['volume'].shift(5)) /
+        bars['volume'].shift(5).clip(lower=1)
+    )
+    bars['vol_trend_5'] = np.where(
+        bars['vol_roc_5'] > 0.10, 1,
+        np.where(bars['vol_roc_5'] < -0.10, -1, 0)
+    )
 
     # Transaction speed: intensity acceleration
     bars['intensity_accel'] = bars['intensity'].diff()
@@ -247,8 +257,9 @@ def walk_forward_split(n, n_folds=5, min_train_ratio=0.5):
 # ============================================================
 
 def get_feature_columns(df):
-    """Feature columns: everything except labels, metadata, raw OHLC."""
+    """Feature columns: everything except labels, metadata, raw OHLC, and pruned groups."""
     exclude = {
+        # Labels and metadata
         'trade_label', 'long_result', 'short_result',
         'long_bars_held', 'short_bars_held',
         'long_mae', 'short_mae', 'long_mfe', 'short_mfe',
@@ -257,6 +268,33 @@ def get_feature_columns(df):
         'direction_label', 'magnitude_label', 'future_return', 'future_close',
         'atr_target', 'quality_label', 'has_trade_outcome',
         'high_5', 'low_5', 'cvd_5_max', 'cvd_5_min',
+        # Duplicate of delta_pct
+        'flow_imbalance',
+        # Pruned group 5: Rolling bar features
+        'return_1',
+        'roll_3_volatility', 'roll_3_flow_imb', 'roll_3_intensity', 'roll_3_vol_ratio',
+        'roll_5_volatility', 'roll_5_flow_imb', 'roll_5_intensity', 'roll_5_vol_ratio',
+        'roll_10_volatility', 'roll_10_flow_imb', 'roll_10_intensity', 'roll_10_vol_ratio',
+        # Pruned group 6: Time & session
+        'hour_sin', 'hour_cos',
+        'session_asia', 'session_europe', 'session_us',
+        'session_overnight', 'session_premarket', 'session_rth',
+        # Pruned group 8: CVD and CVD-derived interaction
+        'cvd', 'cvd_slope_3', 'cvd_slope_5', 'cvd_slope_10',
+        'cvd_accel', 'cvd_accel_5', 'cvd_roc_3', 'cvd_roc_10',
+        'cvd_bull_div', 'cvd_bear_div',
+        'cvd_range_div_5', 'cvd_range_div_10', 'cvd_flow_alignment',
+        'cvd_div_x_pressure', 'cvd_div_x_absorption', 'cvd_div_x_imbalance',
+        # Pruned group 14: Gap
+        'gap_from_prev_high', 'gap_from_prev_low',
+        # Pruned group 15: Multi-timeframe tf5
+        'tf5_range', 'tf5_delta_sum', 'tf5_vol_sum', 'tf5_imbalance',
+        'tf5_absorption', 'tf5_intensity', 'tf5_imb_cluster_sum',
+        # Pruned group 16: Multi-timeframe tf15
+        'tf15_range', 'tf15_delta_sum', 'tf15_vol_sum', 'tf15_imbalance',
+        'tf15_absorption', 'tf15_intensity', 'tf15_imb_cluster_sum',
+        # Raw VA levels (not normalized)
+        'va10_poc', 'va10_vah', 'va10_val',
     }
     return [c for c in df.columns if c not in exclude and not c.startswith('_')]
 
@@ -392,43 +430,13 @@ def train_quality_model(X_train, y_train, X_test, y_test, feature_names):
 # Full Training Pipeline
 # ============================================================
 
-def _load_single_file(fp):
-    """Load one .data file and return (basename, len, dataframe)."""
-    df = decode_file_to_dataframe(fp)
-    return os.path.basename(fp), len(df), df
+def _load_files_to_bars(data_dir, window='1min', workers=0):
+    """Load .data files one at a time and aggregate to bars (memory-efficient)."""
+    return load_files_to_bars(data_dir, window=window, workers=workers)
 
 
-def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60):
-    """Run full feature + label pipeline on all .data files in directory."""
-    import glob
-    from concurrent.futures import ProcessPoolExecutor
-
-    pipeline_start = time.time()
-
-    pattern = os.path.join(data_dir, '*.data')
-    files = sorted(glob.glob(pattern))
-    if not files:
-        print(f"ERROR: No .data files in {data_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Found {len(files)} data file(s)")
-    t0 = time.time()
-    all_dfs = []
-    with ProcessPoolExecutor() as executor:
-        for name, n_ticks, df in executor.map(_load_single_file, files):
-            all_dfs.append(df)
-            print(f"  {name}: {n_ticks:,} ticks")
-
-    raw_df = pd.concat(all_dfs, ignore_index=True).sort_values('timestamp').reset_index(drop=True)
-    print(f"Total ticks: {len(raw_df):,} [{time.time()-t0:.1f}s]")
-
-    # Compute bars
-    t0 = time.time()
-    print(f"Computing {window} bars...")
-    bars = compute_window_features(raw_df, window=window)
-    print(f"  {len(bars)} bars [{time.time()-t0:.1f}s]")
-
-    # Add features
+def _engineer_bar_features(bars):
+    """Add derived features on bar-level data."""
     t0 = time.time()
     print("Adding rolling features...")
     bars = add_rolling_features(bars)
@@ -438,23 +446,33 @@ def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60):
     bars = add_microstructure_features(bars)
     print("Adding multi-timeframe features...")
     bars = add_multi_timeframe_features(bars)
+    print("Adding value area features...")
+    bars = add_value_area_features(bars)
     print(f"  Feature engineering [{time.time()-t0:.1f}s]")
+    return bars
 
-    # Add trade labels
-    t0 = time.time()
-    print(f"Simulating trade outcomes (RR={rr_ratio}, max_hold={max_hold_bars} bars)...")
-    bars = create_trade_labels(bars, rr_ratio=rr_ratio, max_hold_bars=max_hold_bars)
-    print(f"  Trade simulation [{time.time()-t0:.1f}s]")
 
-    # ATR target for volatility model
-    bars['atr_target'] = compute_atr(bars, period=5).shift(-5)
+def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
+                     include_labels=True):
+    """Run full feature (+ optional label) pipeline on all .data files in directory."""
+    pipeline_start = time.time()
 
-    # Quality label: for bars with any definitive trade outcome (win or loss),
-    # mark 1 if at least one direction won, 0 if both lost/timed out.
-    bars['has_trade_outcome'] = ((bars['long_result'] != 0) | (bars['short_result'] != 0)).astype(int)
-    bars['quality_label'] = ((bars['long_result'] == 1) | (bars['short_result'] == 1)).astype(int)
+    bars = _load_files_to_bars(data_dir, window=window)
+    bars = _engineer_bar_features(bars)
 
-    # Drop NaN rows from rolling features
+    if include_labels:
+        t0 = time.time()
+        print(f"Simulating trade outcomes (RR={rr_ratio}, max_hold={max_hold_bars} bars)...")
+        bars = create_trade_labels(bars, rr_ratio=rr_ratio, max_hold_bars=max_hold_bars)
+        print(f"  Trade simulation [{time.time()-t0:.1f}s]")
+
+        bars['atr_target'] = compute_atr(bars, period=5).shift(-5)
+        bars['has_trade_outcome'] = ((bars['long_result'] != 0) | (bars['short_result'] != 0)).astype(int)
+        bars['quality_label'] = ((bars['long_result'] == 1) | (bars['short_result'] == 1)).astype(int)
+    else:
+        bars['is_rth'] = is_rth(bars.index)
+
+    bars = bars.drop(columns=['_vol_profile'], errors='ignore')
     bars = bars.dropna()
     print(f"Complete bars after dropna: {len(bars)}")
     print(f"  Total pipeline [{time.time()-pipeline_start:.1f}s]")
@@ -665,7 +683,7 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
     # ---- Trading Pattern Report ----
     if best_signal_model:
         _generate_pattern_report(best_signal_model, X_all, y_signal, feature_cols,
-                                 rth_indices, output_dir)
+                                 rth_indices, bars.index, output_dir)
 
     return bars, best_signal_model, best_vol_model, best_quality_model
 
@@ -674,14 +692,34 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
 # Pattern Discovery Report
 # ============================================================
 
-def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices, output_dir):
-    """Mine multi-condition trading rules from the trained model and actual outcomes."""
+PATTERN_MIN_WIN_RATE = 0.58
+PATTERN_MIN_TRADES_PER_WEEK = 5
+PATTERN_N_CONDITIONS = 3
+
+
+def _pattern_trades_per_week(mask, trade_mask, timestamps):
+    """Average matching trades per ISO calendar week."""
+    hit_mask = mask & trade_mask
+    n_trades = int(hit_mask.sum())
+    if n_trades == 0:
+        return 0.0, 0
+    ts = pd.to_datetime(np.asarray(timestamps)[hit_mask])
+    n_weeks = pd.Series(ts).dt.to_period('W').nunique()
+    if n_weeks == 0:
+        return 0.0, 0
+    return n_trades / n_weeks, n_weeks
+
+
+def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices,
+                             timestamps, output_dir):
+    """Mine 3-condition trading rules from the trained model and actual outcomes."""
     print(f"\n{'='*60}")
     print(f"  TRADING PATTERN REPORT")
     print(f"{'='*60}")
 
     X_rth = X_all[rth_indices]
     y_rth = y_signal[rth_indices]
+    ts_rth = np.asarray(timestamps)[rth_indices]
 
     # Get per-sample leaf contributions for direction classes
     has_contribs = hasattr(model, 'booster_')
@@ -717,7 +755,7 @@ def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices, 
             imp = model.feature_importances_
             top_features = np.argsort(imp)[::-1][:8]
 
-        # Search for 2-3 condition patterns among top features
+        # Search for 3-condition patterns among top features
         for i in range(len(top_features)):
             fi = top_features[i]
             for cond_i in conditions.get(fi, []):
@@ -726,20 +764,34 @@ def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices, 
                     fj = top_features[j]
                     for cond_j in conditions.get(fj, []):
                         mask_ij = mask_i & cond_j['mask']
-                        n_trades = (mask_ij & trade_mask).sum()
-                        if n_trades < 20:
-                            continue
-                        n_wins = (mask_ij & dir_mask).sum()
-                        win_rate = n_wins / n_trades if n_trades > 0 else 0
-                        if win_rate >= 0.55:
-                            patterns.append({
-                                'direction': dir_label,
-                                'conditions': [cond_i['desc'], cond_j['desc']],
-                                'rules': [cond_i.get('rule', {}), cond_j.get('rule', {})],
-                                'win_rate': win_rate,
-                                'n_trades': int(n_trades),
-                                'n_wins': int(n_wins),
-                            })
+                        for k in range(j + 1, len(top_features)):
+                            fk = top_features[k]
+                            for cond_k in conditions.get(fk, []):
+                                mask_ijk = mask_ij & cond_k['mask']
+                                n_trades = int((mask_ijk & trade_mask).sum())
+                                if n_trades == 0:
+                                    continue
+                                trades_per_week, n_weeks = _pattern_trades_per_week(
+                                    mask_ijk, trade_mask, ts_rth)
+                                if trades_per_week < PATTERN_MIN_TRADES_PER_WEEK:
+                                    continue
+                                n_wins = int((mask_ijk & dir_mask).sum())
+                                win_rate = n_wins / n_trades
+                                if win_rate >= PATTERN_MIN_WIN_RATE:
+                                    patterns.append({
+                                        'direction': dir_label,
+                                        'conditions': [
+                                            cond_i['desc'], cond_j['desc'], cond_k['desc']],
+                                        'rules': [
+                                            cond_i.get('rule', {}),
+                                            cond_j.get('rule', {}),
+                                            cond_k.get('rule', {})],
+                                        'win_rate': win_rate,
+                                        'n_trades': n_trades,
+                                        'n_wins': n_wins,
+                                        'trades_per_week': round(trades_per_week, 1),
+                                        'n_weeks': n_weeks,
+                                    })
 
     # Sort by win_rate * n_trades (balance quality and quantity)
     patterns.sort(key=lambda p: p['win_rate'] * p['n_trades'], reverse=True)
@@ -749,14 +801,19 @@ def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices, 
     report_lines = []
     report_lines.append("=" * 70)
     report_lines.append("  DISCOVERED TRADING PATTERNS")
-    report_lines.append("  (multi-condition rules with >55% win rate, min 20 occurrences)")
+    report_lines.append(
+        f"  ({PATTERN_N_CONDITIONS}-condition rules, >={PATTERN_MIN_WIN_RATE:.0%} win rate, "
+        f">={PATTERN_MIN_TRADES_PER_WEEK} trades/week)")
     report_lines.append("=" * 70)
 
     # Collect all feature names used in patterns for glossary
     used_features = set()
 
     for idx, p in enumerate(patterns, 1):
-        report_lines.append(f"\n  Pattern #{idx}: {p['direction']} -- {p['win_rate']:.0%} win rate ({p['n_wins']}/{p['n_trades']} trades)")
+        tpw = p.get('trades_per_week', 0)
+        report_lines.append(
+            f"\n  Pattern #{idx}: {p['direction']} -- {p['win_rate']:.0%} win rate "
+            f"({p['n_wins']}/{p['n_trades']} trades, {tpw:.1f}/week)")
         report_lines.append(f"  When:")
         for cond in p['conditions']:
             report_lines.append(f"    * {cond}")
@@ -912,6 +969,21 @@ def _get_feature_description(fname):
         'cvd_div_x_pressure': "cvd_range_div * (pressure_ratio - 1). High positive = CVD stuck + buy dominant (bullish strength). High negative = sell dominant (bearish strength).",
         'cvd_div_x_absorption': "cvd_range_div * absorption. High = CVD diverging while volume is being absorbed. Signals trapped traders, likely reversal.",
         'cvd_div_x_imbalance': "cvd_range_div * net_imbalance. CVD stuck + footprint imbalance stacking same direction = confirms strength/continuation.",
+
+        # Volume trend
+        'vol_roc_5': "Volume rate of change over 5 bars: (vol - vol_5_ago) / vol_5_ago. Positive = increasing, negative = decreasing.",
+        'vol_trend_5': "Discrete volume trend over 5 bars: +1 (increasing >10%), -1 (decreasing >10%), 0 (flat).",
+
+        # Value area (10-bar cumulative volume profile)
+        'va10_price_vs_poc': "(mid - POC) / ATR_14. Price relative to 10-bar cumulative fair value. Positive = above POC.",
+        'va10_price_vs_vah': "(mid - VAH) / ATR_14. Positive = above value area high (breakout territory).",
+        'va10_price_vs_val': "(mid - VAL) / ATR_14. Negative = below value area low (breakdown territory).",
+        'va10_in_value_area': "1 if current price is inside the 10-bar 70% value area (between VAL and VAH).",
+        'va10_above_vah': "1 if current price is above value area high (potential breakout).",
+        'va10_below_val': "1 if current price is below value area low (potential breakdown).",
+        'va10_va_width': "(VAH - VAL) / ATR_14. Width of accepted value range. Low = tight consolidation.",
+        'va10_volume_at_price': "Volume at current price / max volume in 10-bar profile. High = at accepted value.",
+        'va10_price_percentile': "Percentile of current price in 10-bar volume distribution. 0.5 = middle of range.",
     }
     return descriptions.get(fname, None)
 

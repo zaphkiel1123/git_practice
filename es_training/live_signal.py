@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 import joblib
 
-from feature_pipeline import decode_file_to_dataframe, compute_window_features, add_rolling_features, add_time_features
+from feature_pipeline import decode_file_to_dataframe, compute_window_features, add_rolling_features, add_time_features, add_value_area_features
 from train_trading_model import add_microstructure_features, add_multi_timeframe_features
 from labels import compute_atr, is_rth, TICK_SIZE
 
@@ -64,6 +64,8 @@ def compute_features_for_file(filepath, window='1min'):
     bars = add_time_features(bars)
     bars = add_microstructure_features(bars)
     bars = add_multi_timeframe_features(bars)
+    bars = add_value_area_features(bars)
+    bars = bars.drop(columns=['_vol_profile'], errors='ignore')
     bars = bars.dropna()
     return bars
 

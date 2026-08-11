@@ -19,6 +19,7 @@ import argparse
 import os
 import sys
 import json
+import time
 from datetime import datetime
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +29,11 @@ import numpy as np
 import pandas as pd
 import joblib
 
+from feature_pipeline import (
+    add_rolling_features, add_time_features, add_value_area_features,
+    load_files_to_bars,
+)
+from train_trading_model import add_microstructure_features, add_multi_timeframe_features
 from labels import TICK_SIZE, is_rth, compute_atr
 
 POINT_VALUE = 50.0  # $50 per point per ES contract
@@ -473,6 +479,33 @@ def print_report(metrics, trades_df=None):
     print(f"{'='*60}")
 
 
+def prepare_backtest_features(data_dir, window='1min', workers=0):
+    """Memory-efficient feature pipeline for backtesting (no label simulation)."""
+    pipeline_start = time.time()
+
+    bars = load_files_to_bars(data_dir, window=window, workers=workers)
+
+    t0 = time.time()
+    print("Adding rolling features...")
+    bars = add_rolling_features(bars)
+    print("Adding time features...")
+    bars = add_time_features(bars)
+    print("Adding microstructure features...")
+    bars = add_microstructure_features(bars)
+    print("Adding multi-timeframe features...")
+    bars = add_multi_timeframe_features(bars)
+    print("Adding value area features...")
+    bars = add_value_area_features(bars)
+    print(f"  Feature engineering [{time.time()-t0:.1f}s]")
+
+    bars['is_rth'] = is_rth(bars.index)
+    bars = bars.drop(columns=['_vol_profile'], errors='ignore')
+    bars = bars.dropna()
+    print(f"Complete bars after dropna: {len(bars)}")
+    print(f"  Total pipeline [{time.time()-pipeline_start:.1f}s]")
+    return bars
+
+
 def main():
     parser = argparse.ArgumentParser(description='Backtest ES mini trading system.')
     parser.add_argument('models_dir', help='Directory with trained models')
@@ -482,6 +515,8 @@ def main():
     parser.add_argument('--signal-threshold', type=float, default=0.40, help='Signal confidence threshold (default: 0.40 for 3-class model)')
     parser.add_argument('--quality-threshold', type=float, default=0.50, help='Quality filter threshold')
     parser.add_argument('--max-hold', type=int, default=60, help='Max bars to hold')
+    parser.add_argument('--workers', type=int, default=0,
+                        help='File pipeline workers: 0=prefetch thread (default), 1=sequential, >1=parallel processes')
     parser.add_argument('--output', default=None, help='Output directory for results')
 
     args = parser.parse_args()
@@ -525,9 +560,9 @@ def main():
         else:
             bars = pd.read_csv(args.features, index_col=0, parse_dates=True)
     elif args.data:
-        from train_trading_model import prepare_features
-        bars = prepare_features(args.data, window=meta.get('window', '1min'),
-                                rr_ratio=args.rr, max_hold_bars=args.max_hold)
+        bars = prepare_backtest_features(
+            args.data, window=meta.get('window', '1min'), workers=args.workers,
+        )
     else:
         # Default: look for training_features in models_dir
         fp = os.path.join(args.models_dir, 'training_features.parquet')
