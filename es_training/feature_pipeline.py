@@ -591,6 +591,14 @@ def add_value_area_features(bars, lookback=10, value_area_pct=0.70, min_volume=5
     bars['va10_volume_at_price'] = vol_at_price_arr
     bars['va10_price_percentile'] = price_pct_arr
 
+    # Composite zone: +1 above VAH, -1 below VAL, 0 in value area, NaN if invalid
+    bars['va10_zone'] = np.select(
+        [bars['va10_above_vah'] == 1, bars['va10_below_val'] == 1],
+        [1, -1],
+        default=0,
+    ).astype(float)
+    bars.loc[~va_valid, 'va10_zone'] = np.nan
+
     return bars
 
 

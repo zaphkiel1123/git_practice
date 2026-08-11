@@ -27,6 +27,7 @@ import joblib
 from feature_pipeline import decode_file_to_dataframe, compute_window_features, add_rolling_features, add_time_features, add_value_area_features
 from train_trading_model import add_microstructure_features, add_multi_timeframe_features
 from labels import compute_atr, is_rth, TICK_SIZE
+from core_features import check_core_alignment, DEFAULT_CORE_CONFIG
 
 
 def load_models(models_dir):
@@ -72,7 +73,7 @@ def compute_features_for_file(filepath, window='1min'):
 
 def generate_signal(bars, feature_cols, signal_model, vol_model, quality_model,
                     rr_ratio=1.5, signal_threshold=0.55, quality_threshold=0.50,
-                    sl_multiplier=1.5, min_sl=2.0, max_sl=8.0):
+                    sl_multiplier=1.5, min_sl=2.0, max_sl=8.0, core_config=None):
     """Generate signal for the latest bar."""
     if len(bars) == 0:
         return None
@@ -108,6 +109,18 @@ def generate_signal(bars, feature_cols, signal_model, vol_model, quality_model,
         return {
             'signal': 'NO_TRADE',
             'reason': f'Low confidence (long={prob_long:.3f}, short={prob_short:.3f})',
+            'prob_long': float(prob_long),
+            'prob_short': float(prob_short),
+        }
+
+    # Core feature alignment gate
+    feature_dict = dict(zip(feature_cols, X[0]))
+    aligned, gate_reason = check_core_alignment(feature_dict, direction, core_config)
+    if not aligned:
+        return {
+            'signal': 'NO_TRADE',
+            'reason': f'Core gate: {gate_reason}',
+            'direction': 'LONG' if direction == 1 else 'SHORT',
             'prob_long': float(prob_long),
             'prob_short': float(prob_short),
         }
@@ -167,10 +180,13 @@ def watch_mode(models_dir, watch_dir, window, rr_ratio, signal_threshold, qualit
     """Continuously watch for new data and emit signals."""
     signal_model, vol_model, quality_model, meta = load_models(models_dir)
     feature_cols = meta['feature_columns']
+    core_config = meta.get('core_feature_config', DEFAULT_CORE_CONFIG)
 
     print(f"Watching {watch_dir} for .data file changes...")
     print(f"  Window: {window} | RR: {rr_ratio} | Signal threshold: {signal_threshold}")
     print(f"  Models loaded from: {models_dir}")
+    print(f"  Core gate: delta_pct_min={core_config['delta_pct_min']}, "
+          f"delta_min={core_config['delta_min_contracts']}")
     print(f"  Press Ctrl+C to stop\n")
 
     last_mtime = {}
@@ -194,7 +210,7 @@ def watch_mode(models_dir, watch_dir, window, rr_ratio, signal_threshold, qualit
             signal = generate_signal(
                 bars, feature_cols, signal_model, vol_model, quality_model,
                 rr_ratio=rr_ratio, signal_threshold=signal_threshold,
-                quality_threshold=quality_threshold,
+                quality_threshold=quality_threshold, core_config=core_config,
             )
 
             if signal['signal'] == 'NO_TRADE':
@@ -214,6 +230,7 @@ def single_file_mode(models_dir, filepath, window, rr_ratio, signal_threshold, q
     """Process a single file and show recent signals."""
     signal_model, vol_model, quality_model, meta = load_models(models_dir)
     feature_cols = meta['feature_columns']
+    core_config = meta.get('core_feature_config', DEFAULT_CORE_CONFIG)
 
     print(f"Processing: {filepath}")
     bars = compute_features_for_file(filepath, window=window)
@@ -233,7 +250,7 @@ def single_file_mode(models_dir, filepath, window, rr_ratio, signal_threshold, q
         sig = generate_signal(
             bar_slice, feature_cols, signal_model, vol_model, quality_model,
             rr_ratio=rr_ratio, signal_threshold=signal_threshold,
-            quality_threshold=quality_threshold,
+            quality_threshold=quality_threshold, core_config=core_config,
         )
         sig['bar_time'] = str(bars.index[i])
         signals.append(sig)
