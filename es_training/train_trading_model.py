@@ -12,6 +12,7 @@ All use walk-forward validation with no look-ahead bias.
 Usage:
     python3 train_trading_model.py /path/to/data/ --window 1min --rr 1.5
     python3 train_trading_model.py /path/to/data/ --window 1min --rr 2.0 --folds 7
+    python3 train_trading_model.py /path/to/data/ --workers 4
 """
 
 import os
@@ -453,11 +454,11 @@ def _engineer_bar_features(bars):
 
 
 def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
-                     include_labels=True):
+                     include_labels=True, workers=0):
     """Run full feature (+ optional label) pipeline on all .data files in directory."""
     pipeline_start = time.time()
 
-    bars = _load_files_to_bars(data_dir, window=window)
+    bars = _load_files_to_bars(data_dir, window=window, workers=workers)
     bars = _engineer_bar_features(bars)
 
     if include_labels:
@@ -481,11 +482,11 @@ def prepare_features(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
 
 
 def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
-                 n_folds=5, output_dir=None):
+                 n_folds=5, output_dir=None, workers=0):
     """Full training pipeline with walk-forward validation."""
 
     bars = prepare_features(data_dir, window=window, rr_ratio=rr_ratio,
-                            max_hold_bars=max_hold_bars)
+                            max_hold_bars=max_hold_bars, workers=workers)
 
     if output_dir is None:
         output_dir = os.path.join(_SCRIPT_DIR, 'data', 'models')
@@ -1073,6 +1074,8 @@ def main():
     parser.add_argument('--rr', type=float, default=1.5, help='Minimum risk-reward ratio (default: 1.5)')
     parser.add_argument('--max-hold', type=int, default=60, help='Max bars to hold a trade (default: 60)')
     parser.add_argument('--folds', type=int, default=5, help='Walk-forward folds (default: 5)')
+    parser.add_argument('--workers', type=int, default=0,
+                        help='File pipeline workers: 0=prefetch thread (default), 1=sequential, >1=parallel processes')
     parser.add_argument('--output-dir', default=None, help='Output directory for models (default: ./data/models)')
 
     args = parser.parse_args()
@@ -1084,7 +1087,7 @@ def main():
     run_training(
         args.data_dir, window=args.window, rr_ratio=args.rr,
         max_hold_bars=args.max_hold, n_folds=args.folds,
-        output_dir=args.output_dir
+        output_dir=args.output_dir, workers=args.workers,
     )
 
 

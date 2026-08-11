@@ -2,8 +2,8 @@
 ./run_trading.sh ./data 1min 1.5
 
 # Or step by step:
-python train_trading_model.py ./data --rr 1.5
-python backtester.py ./data/models --rr 1.5
+python train_trading_model.py ./data --rr 1.5 --workers 4
+python backtester.py ./data/models --rr 1.5 --workers 4 --data ./test_data
 python explain_model.py ./data/models --trades ./data/models/backtest_trades.csv
 python generate_trade_output.py ./data/models --data ./data/
 

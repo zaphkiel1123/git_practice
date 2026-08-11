@@ -6,7 +6,7 @@ Processes bars sequentially (no look-ahead), applies entry/exit rules
 with SL/TP management, enforces 1.5R minimum, RTH only, flat by 15:30 ET.
 
 Usage:
-    python3 backtester.py /path/to/models/ --data /path/to/data/
+    python3 backtester.py /path/to/models/ --data /path/to/data/ --workers 4
     python3 backtester.py /path/to/models/ --features training_features.parquet
 	
 	# More selective (fewer but higher-quality trades)
