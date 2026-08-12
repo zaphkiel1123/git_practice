@@ -48,7 +48,6 @@ from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegress
 
 from feature_pipeline import decode_file_to_dataframe, compute_window_features, add_rolling_features, add_time_features, add_value_area_features, load_files_to_bars
 from labels import create_trade_labels, compute_atr, is_rth
-from core_features import check_core_alignment, calibrate_thresholds, CORE_FEATURES, DEFAULT_CORE_CONFIG
 
 warnings.filterwarnings('ignore', category=UserWarning)
 
@@ -652,11 +651,6 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
         print(f"  Quality model → {path}")
 
     # Save feature column list
-    # Calibrate core feature thresholds from winning trades
-    core_config = calibrate_thresholds(bars[rth_mask.astype(bool)], y_signal[rth_mask.astype(bool)])
-    print(f"  Core feature config: delta_pct_min={core_config['delta_pct_min']}, "
-          f"delta_min={core_config['delta_min_contracts']}")
-
     meta = {
         'feature_columns': feature_cols,
         'window': window,
@@ -667,7 +661,6 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
         'volatility_metrics': vol_metrics,
         'quality_metrics': quality_metrics,
         'models': models_saved,
-        'core_feature_config': core_config,
         'trained_at': datetime.now().isoformat(),
     }
     meta_path = os.path.join(output_dir, 'training_meta.json')
@@ -691,8 +684,7 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
     # ---- Trading Pattern Report ----
     if best_signal_model:
         _generate_pattern_report(best_signal_model, X_all, y_signal, feature_cols,
-                                 rth_indices, bars.index, output_dir,
-                                 core_config=core_config)
+                                 rth_indices, bars.index, output_dir)
 
     return bars, best_signal_model, best_vol_model, best_quality_model
 
@@ -702,10 +694,8 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
 # ============================================================
 
 PATTERN_MIN_WIN_RATE = 0.58
-PATTERN_MIN_TRADES_PER_WEEK = 3
-PATTERN_N_CORE_CONDITIONS = 3
-PATTERN_N_OPTIONAL_CONDITIONS = 2
-PATTERN_N_CONDITIONS = PATTERN_N_CORE_CONDITIONS + PATTERN_N_OPTIONAL_CONDITIONS
+PATTERN_MIN_TRADES_PER_WEEK = 5
+PATTERN_N_CONDITIONS = 3
 
 
 def _pattern_trades_per_week(mask, trade_mask, timestamps):
@@ -722,119 +712,102 @@ def _pattern_trades_per_week(mask, trade_mask, timestamps):
 
 
 def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices,
-                             timestamps, output_dir, core_config=None):
-    """Mine trading rules with 3 compulsory core + 2 optional conditions."""
+                             timestamps, output_dir):
+    """Mine 3-condition trading rules from the trained model and actual outcomes."""
     print(f"\n{'='*60}")
     print(f"  TRADING PATTERN REPORT")
     print(f"{'='*60}")
 
-    if core_config is None:
-        core_config = DEFAULT_CORE_CONFIG
-
     X_rth = X_all[rth_indices]
     y_rth = y_signal[rth_indices]
     ts_rth = np.asarray(timestamps)[rth_indices]
-
-    # Locate core feature indices
-    core_idx = {}
-    for fname in ['delta_pct', 'delta', 'va10_zone']:
-        if fname in feature_cols:
-            core_idx[fname] = feature_cols.index(fname)
 
     # Get per-sample leaf contributions for direction classes
     has_contribs = hasattr(model, 'booster_')
     if has_contribs:
         raw = model.booster_.predict(X_rth, pred_contrib=True)
         n_feats = len(feature_cols)
+        # LightGBM multiclass: shape (n_samples, (n_features+1)*n_classes)
         if raw.ndim == 2:
             n_classes = 3
             raw = raw.reshape(len(X_rth), n_feats + 1, n_classes)
-        contribs_long = raw[:, :n_feats, 2]
-        contribs_short = raw[:, :n_feats, 0]
+        contribs_long = raw[:, :n_feats, 2]   # contributions toward long
+        contribs_short = raw[:, :n_feats, 0]  # contributions toward short
 
-    # Define condition thresholds
+    # Define condition thresholds using percentiles
     conditions = _build_conditions(X_rth, feature_cols)
 
-    # Build core condition masks per direction
-    core_conditions = _build_core_conditions(X_rth, feature_cols, core_idx, core_config)
-
+    # Find multi-condition patterns with high win rates
     patterns = []
     for direction, dir_label in [(1, 'LONG'), (-1, 'SHORT')]:
         dir_mask = (y_rth == direction)
         opp_mask = (y_rth == -direction)
-        trade_mask = dir_mask | opp_mask
+        trade_mask = dir_mask | opp_mask  # bars where either direction won
 
         if trade_mask.sum() < 50:
             continue
 
-        # Core alignment pre-filter: only consider bars where all 3 core features agree
-        core_conds = core_conditions[dir_label]
-        core_mask = np.ones(len(X_rth), dtype=bool)
-        core_descs = []
-        core_rules = []
-        for cc in core_conds:
-            core_mask &= cc['mask']
-            core_descs.append(cc['desc'])
-            core_rules.append(cc['rule'])
-
-        if (core_mask & trade_mask).sum() < 20:
-            continue
-
-        # Get top contributing features for this direction (excluding core features)
-        excluded_indices = set(core_idx.values())
+        # Get top contributing features for this direction
         if has_contribs:
             contribs = contribs_long if direction == 1 else contribs_short
             mean_contrib = contribs[dir_mask].mean(axis=0) if dir_mask.sum() > 0 else np.zeros(len(feature_cols))
-            ranked = np.argsort(np.abs(mean_contrib))[::-1]
-            top_features = [idx for idx in ranked if idx not in excluded_indices][:10]
+            top_features = np.argsort(np.abs(mean_contrib))[::-1][:8]
         else:
             imp = model.feature_importances_
-            ranked = np.argsort(imp)[::-1]
-            top_features = [idx for idx in ranked if idx not in excluded_indices][:10]
+            top_features = np.argsort(imp)[::-1][:8]
 
-        # Search for 2-condition optional patterns among top features within core-aligned bars
+        # Search for 3-condition patterns among top features
         for i in range(len(top_features)):
             fi = top_features[i]
             for cond_i in conditions.get(fi, []):
-                mask_i = core_mask & cond_i['mask']
+                mask_i = cond_i['mask']
                 for j in range(i + 1, len(top_features)):
                     fj = top_features[j]
                     for cond_j in conditions.get(fj, []):
                         mask_ij = mask_i & cond_j['mask']
-                        n_trades = int((mask_ij & trade_mask).sum())
-                        if n_trades == 0:
-                            continue
-                        trades_per_week, n_weeks = _pattern_trades_per_week(
-                            mask_ij, trade_mask, ts_rth)
-                        if trades_per_week < PATTERN_MIN_TRADES_PER_WEEK:
-                            continue
-                        n_wins = int((mask_ij & dir_mask).sum())
-                        win_rate = n_wins / n_trades
-                        if win_rate >= PATTERN_MIN_WIN_RATE:
-                            patterns.append({
-                                'direction': dir_label,
-                                'conditions': core_descs + [cond_i['desc'], cond_j['desc']],
-                                'rules': core_rules + [cond_i.get('rule', {}), cond_j.get('rule', {})],
-                                'win_rate': win_rate,
-                                'n_trades': n_trades,
-                                'n_wins': n_wins,
-                                'trades_per_week': round(trades_per_week, 1),
-                                'n_weeks': n_weeks,
-                            })
+                        for k in range(j + 1, len(top_features)):
+                            fk = top_features[k]
+                            for cond_k in conditions.get(fk, []):
+                                mask_ijk = mask_ij & cond_k['mask']
+                                n_trades = int((mask_ijk & trade_mask).sum())
+                                if n_trades == 0:
+                                    continue
+                                trades_per_week, n_weeks = _pattern_trades_per_week(
+                                    mask_ijk, trade_mask, ts_rth)
+                                if trades_per_week < PATTERN_MIN_TRADES_PER_WEEK:
+                                    continue
+                                n_wins = int((mask_ijk & dir_mask).sum())
+                                win_rate = n_wins / n_trades
+                                if win_rate >= PATTERN_MIN_WIN_RATE:
+                                    patterns.append({
+                                        'direction': dir_label,
+                                        'conditions': [
+                                            cond_i['desc'], cond_j['desc'], cond_k['desc']],
+                                        'rules': [
+                                            cond_i.get('rule', {}),
+                                            cond_j.get('rule', {}),
+                                            cond_k.get('rule', {})],
+                                        'win_rate': win_rate,
+                                        'n_trades': n_trades,
+                                        'n_wins': n_wins,
+                                        'trades_per_week': round(trades_per_week, 1),
+                                        'n_weeks': n_weeks,
+                                    })
 
     # Sort by win_rate * n_trades (balance quality and quantity)
     patterns.sort(key=lambda p: p['win_rate'] * p['n_trades'], reverse=True)
-    patterns = patterns[:30]
+    patterns = patterns[:30]  # top 30 patterns
 
     # Print report
     report_lines = []
     report_lines.append("=" * 70)
     report_lines.append("  DISCOVERED TRADING PATTERNS")
     report_lines.append(
-        f"  ({PATTERN_N_CORE_CONDITIONS} core + {PATTERN_N_OPTIONAL_CONDITIONS} optional conditions, "
-        f">={PATTERN_MIN_WIN_RATE:.0%} win rate, >={PATTERN_MIN_TRADES_PER_WEEK} trades/week)")
+        f"  ({PATTERN_N_CONDITIONS}-condition rules, >={PATTERN_MIN_WIN_RATE:.0%} win rate, "
+        f">={PATTERN_MIN_TRADES_PER_WEEK} trades/week)")
     report_lines.append("=" * 70)
 
+    # Collect all feature names used in patterns for glossary
     used_features = set()
 
     for idx, p in enumerate(patterns, 1):
@@ -842,23 +815,17 @@ def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices,
         report_lines.append(
             f"\n  Pattern #{idx}: {p['direction']} -- {p['win_rate']:.0%} win rate "
             f"({p['n_wins']}/{p['n_trades']} trades, {tpw:.1f}/week)")
-        report_lines.append(f"  Core conditions (compulsory):")
-        for cond in p['conditions'][:PATTERN_N_CORE_CONDITIONS]:
+        report_lines.append(f"  When:")
+        for cond in p['conditions']:
             report_lines.append(f"    * {cond}")
-            for fname in feature_cols:
-                if fname in cond:
-                    used_features.add(fname)
-                    break
-        report_lines.append(f"  Additional conditions:")
-        for cond in p['conditions'][PATTERN_N_CORE_CONDITIONS:]:
-            report_lines.append(f"    * {cond}")
+            # Extract feature name from condition description
             for fname in feature_cols:
                 if fname in cond:
                     used_features.add(fname)
                     break
         report_lines.append(f"  -> {p['win_rate']:.0%} chance of {p['direction'].lower()} continuation")
 
-    # Add glossary
+    # Add glossary of terms used
     report_lines.append(f"\n{'='*70}")
     report_lines.append("  GLOSSARY: What each term means and how it is calculated")
     report_lines.append("=" * 70)
@@ -873,52 +840,16 @@ def _generate_pattern_report(model, X_all, y_signal, feature_cols, rth_indices,
     report_text = '\n'.join(report_lines)
     print(report_text)
 
+    # Save to file
     report_path = os.path.join(output_dir, 'trading_patterns.txt')
     with open(report_path, 'w', encoding='utf-8') as f:
         f.write(report_text)
     print(f"\n  Pattern report → {report_path}")
 
+    # Also save as JSON for programmatic use
     json_path = os.path.join(output_dir, 'trading_patterns.json')
     with open(json_path, 'w') as f:
         json.dump({'patterns': patterns, 'generated_at': datetime.now().isoformat()}, f, indent=2)
-
-
-def _build_core_conditions(X, feature_cols, core_idx, core_config):
-    """Build direction-aligned core conditions for LONG and SHORT."""
-    delta_pct_min = core_config.get('delta_pct_min', 0.05)
-    delta_min = core_config.get('delta_min_contracts', 200)
-
-    def _c(mask, desc, fname, op, thresh):
-        return {'mask': mask, 'desc': desc, 'rule': {'feature': fname, 'op': op, 'threshold': float(thresh)}}
-
-    result = {'LONG': [], 'SHORT': []}
-
-    if 'delta_pct' in core_idx:
-        fi = core_idx['delta_pct']
-        vals = X[:, fi]
-        result['LONG'].append(_c(vals > delta_pct_min,
-            f'delta_pct > {delta_pct_min:.3f} (positive aggression)', 'delta_pct', '>', delta_pct_min))
-        result['SHORT'].append(_c(vals < -delta_pct_min,
-            f'delta_pct < {-delta_pct_min:.3f} (negative aggression)', 'delta_pct', '<', -delta_pct_min))
-
-    if 'delta' in core_idx:
-        fi = core_idx['delta']
-        vals = X[:, fi]
-        result['LONG'].append(_c(vals > delta_min,
-            f'delta > {delta_min:.0f} (net buying volume)', 'delta', '>', delta_min))
-        result['SHORT'].append(_c(vals < -delta_min,
-            f'delta < {-delta_min:.0f} (net selling volume)', 'delta', '<', -delta_min))
-
-    if 'va10_zone' in core_idx:
-        fi = core_idx['va10_zone']
-        vals = X[:, fi]
-        valid = ~np.isnan(vals)
-        result['LONG'].append(_c(valid & (vals >= 0),
-            'va10_zone >= 0 (in/above value area)', 'va10_zone', '>=', 0))
-        result['SHORT'].append(_c(valid & (vals <= 0),
-            'va10_zone <= 0 (in/below value area)', 'va10_zone', '<=', 0))
-
-    return result
 
 
 def _get_feature_description(fname):
@@ -1054,8 +985,6 @@ def _get_feature_description(fname):
         'va10_va_width': "(VAH - VAL) / ATR_14. Width of accepted value range. Low = tight consolidation.",
         'va10_volume_at_price': "Volume at current price / max volume in 10-bar profile. High = at accepted value.",
         'va10_price_percentile': "Percentile of current price in 10-bar volume distribution. 0.5 = middle of range.",
-        'va10_zone': "+1 if above VAH (breakout), 0 if inside value area, -1 if below VAL (breakdown). "
-                     "Composite of va10_above_vah/va10_below_val/va10_in_value_area for direction alignment gating.",
     }
     return descriptions.get(fname, None)
 
@@ -1071,30 +1000,9 @@ def _build_conditions(X, feature_cols):
         vals = X[:, fi]
         conditions[fi] = []
 
-        if fname == 'va10_zone':
-            valid = ~np.isnan(vals)
-            conditions[fi].append(_c(valid & (vals >= 0), 'va10_zone >= 0 (in/above value area)', fname, '>=', 0))
-            conditions[fi].append(_c(valid & (vals <= 0), 'va10_zone <= 0 (in/below value area)', fname, '<=', 0))
-            conditions[fi].append(_c(valid & (vals == 1), 'va10_zone = +1 (above VAH)', fname, '==', 1))
-            conditions[fi].append(_c(valid & (vals == -1), 'va10_zone = -1 (below VAL)', fname, '==', -1))
-
-        elif fname == 'delta_pct':
-            p80 = np.percentile(vals, 80)
-            p20 = np.percentile(vals, 20)
-            conditions[fi].append(_c(vals > p80, f'delta_pct strongly positive (>{p80:.3f})', fname, '>', p80))
-            conditions[fi].append(_c(vals < p20, f'delta_pct strongly negative (<{p20:.3f})', fname, '<', p20))
-            conditions[fi].append(_c(vals > 0.05, 'delta_pct > 0.05 (positive aggression)', fname, '>', 0.05))
-            conditions[fi].append(_c(vals < -0.05, 'delta_pct < -0.05 (negative aggression)', fname, '<', -0.05))
-
-        elif fname == 'delta':
-            p80 = np.percentile(vals, 80)
-            p20 = np.percentile(vals, 20)
-            conditions[fi].append(_c(vals > p80, f'delta strongly positive (>{p80:.0f} contracts)', fname, '>', p80))
-            conditions[fi].append(_c(vals < p20, f'delta strongly negative (<{p20:.0f} contracts)', fname, '<', p20))
-            conditions[fi].append(_c(vals > 0, 'delta > 0 (net buying)', fname, '>', 0))
-            conditions[fi].append(_c(vals < 0, 'delta < 0 (net selling)', fname, '<', 0))
-
-        elif 'cvd' == fname or fname.startswith('cvd_slope') or fname.startswith('cvd_accel'):
+        if 'cvd' == fname or fname.startswith('cvd_slope') or fname.startswith('cvd_accel'):
+            # CVD: rising vs falling, extreme levels
+            med = np.median(vals)
             p75 = np.percentile(vals, 75)
             p25 = np.percentile(vals, 25)
             conditions[fi].append(_c(vals > p75, f'{fname} elevated (>{p75:.0f}, top 25%)', fname, '>', p75))
@@ -1148,6 +1056,7 @@ def _build_conditions(X, feature_cols):
             conditions[fi].append(_c(vals < p25, f'{fname} bearish (<{p25:.3f})', fname, '<', p25))
 
         else:
+            # Generic: above/below median, extreme quartiles
             p75 = np.percentile(vals, 75)
             p25 = np.percentile(vals, 25)
             if not np.isnan(p75) and p75 != p25:

@@ -35,7 +35,6 @@ from feature_pipeline import (
 )
 from train_trading_model import add_microstructure_features, add_multi_timeframe_features
 from labels import TICK_SIZE, is_rth, compute_atr
-from core_features import check_core_alignment, DEFAULT_CORE_CONFIG
 
 POINT_VALUE = 50.0  # $50 per point per ES contract
 SLIPPAGE_TICKS = 1  # 1 tick slippage per side
@@ -65,8 +64,7 @@ class Trade:
 class Backtester:
     def __init__(self, signal_model, vol_model, quality_model, feature_cols,
                  rr_ratio=1.5, signal_threshold=0.40, quality_threshold=0.50,
-                 max_hold_bars=60, sl_multiplier=1.5, min_sl=2.0, max_sl=8.0,
-                 core_config=None):
+                 max_hold_bars=60, sl_multiplier=1.5, min_sl=2.0, max_sl=8.0):
         self.signal_model = signal_model
         self.vol_model = vol_model
         self.quality_model = quality_model
@@ -78,7 +76,6 @@ class Backtester:
         self.sl_multiplier = sl_multiplier
         self.min_sl = min_sl
         self.max_sl = max_sl
-        self.core_config = core_config if core_config is not None else DEFAULT_CORE_CONFIG
         self.patterns = []
 
     def load_patterns(self, patterns_path):
@@ -298,13 +295,6 @@ class Backtester:
                     pred_direction = int(pred) - 1
 
                 if pred_direction == 0:
-                    equity_curve.append({'time': current_time, 'equity': equity})
-                    continue
-
-                # Core feature alignment gate
-                feature_dict = dict(zip(self.feature_cols, X[0]))
-                aligned, _ = check_core_alignment(feature_dict, pred_direction, self.core_config)
-                if not aligned:
                     equity_curve.append({'time': current_time, 'equity': equity})
                     continue
 
@@ -561,7 +551,6 @@ def main():
     with open(meta_path) as f:
         meta = json.load(f)
     feature_cols = meta['feature_columns']
-    core_config = meta.get('core_feature_config', DEFAULT_CORE_CONFIG)
 
     # Load or compute features
     if args.features:
@@ -595,7 +584,6 @@ def main():
         signal_threshold=args.signal_threshold,
         quality_threshold=args.quality_threshold,
         max_hold_bars=args.max_hold,
-        core_config=core_config,
     )
 
     patterns_path = os.path.join(args.models_dir, 'trading_patterns.json')
