@@ -63,12 +63,14 @@ class Trade:
 
 class Backtester:
     def __init__(self, signal_model, vol_model, quality_model, feature_cols,
+                 filter_feature_cols=None,
                  rr_ratio=1.5, signal_threshold=0.40, quality_threshold=0.50,
                  max_hold_bars=60, sl_multiplier=1.5, min_sl=2.0, max_sl=8.0):
         self.signal_model = signal_model
         self.vol_model = vol_model
         self.quality_model = quality_model
         self.feature_cols = feature_cols
+        self.filter_feature_cols = filter_feature_cols or feature_cols
         self.rr_ratio = rr_ratio
         self.signal_threshold = signal_threshold
         self.quality_threshold = quality_threshold
@@ -201,6 +203,7 @@ class Backtester:
         equity_curve = []
 
         feature_data = bars[self.feature_cols].values
+        filter_data = bars[self.filter_feature_cols].values
         timestamps = bars.index
         rth_mask = bars['is_rth'].values.astype(bool) if 'is_rth' in bars.columns else is_rth(timestamps).values
 
@@ -274,6 +277,7 @@ class Backtester:
             # Entry logic (only when flat and in RTH)
             if position is None and rth_mask[i] and not session_end_mask[i]:
                 X = feature_data[i:i+1]
+                X_filter = filter_data[i:i+1]
 
                 # Get signal model prediction
                 if hasattr(self.signal_model, 'predict_proba'):
@@ -301,9 +305,9 @@ class Backtester:
                 # Quality filter
                 if self.quality_model is not None:
                     if hasattr(self.quality_model, 'predict_proba'):
-                        q_prob = self.quality_model.predict_proba(X)[0][1]
+                        q_prob = self.quality_model.predict_proba(X_filter)[0][1]
                     else:
-                        q_prob = self.quality_model.predict(X)[0]
+                        q_prob = self.quality_model.predict(X_filter)[0]
                     if q_prob < self.quality_threshold:
                         equity_curve.append({'time': current_time, 'equity': equity})
                         continue
@@ -311,9 +315,9 @@ class Backtester:
                 # Compute SL from volatility model
                 if self.vol_model is not None:
                     if hasattr(self.vol_model, 'predict'):
-                        pred_atr = self.vol_model.predict(X)[0]
+                        pred_atr = self.vol_model.predict(X_filter)[0]
                     else:
-                        pred_atr = float(self.vol_model.predict(X))
+                        pred_atr = float(self.vol_model.predict(X_filter))
                     sl_points = np.clip(pred_atr * self.sl_multiplier, self.min_sl, self.max_sl)
                 else:
                     sl_points = bar.get('atr_14', 3.0) * self.sl_multiplier
@@ -550,7 +554,8 @@ def main():
     meta_path = os.path.join(args.models_dir, 'training_meta.json')
     with open(meta_path) as f:
         meta = json.load(f)
-    feature_cols = meta['feature_columns']
+    feature_cols = meta.get('signal_feature_columns', meta['feature_columns'])
+    filter_feature_cols = meta.get('filter_feature_columns', feature_cols)
 
     # Load or compute features
     if args.features:
@@ -580,6 +585,7 @@ def main():
         vol_model=vol_model,
         quality_model=quality_model,
         feature_cols=feature_cols,
+        filter_feature_cols=filter_feature_cols,
         rr_ratio=args.rr,
         signal_threshold=args.signal_threshold,
         quality_threshold=args.quality_threshold,

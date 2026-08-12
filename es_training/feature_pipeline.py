@@ -566,14 +566,9 @@ def add_value_area_features(bars, lookback=10, value_area_pct=0.70, min_volume=5
     if 'mid' not in bars.columns:
         bars['mid'] = (bars['high'] + bars['low']) / 2
 
-    if 'atr_14' in bars.columns:
-        atr_safe = bars['atr_14'].clip(lower=TICK_SIZE_FP)
-    else:
-        atr_safe = (bars['high'] - bars['low']).rolling(14).mean().clip(lower=TICK_SIZE_FP)
-
-    bars['va10_price_vs_poc'] = (bars['mid'] - bars['va10_poc']) / atr_safe
-    bars['va10_price_vs_vah'] = (bars['mid'] - bars['va10_vah']) / atr_safe
-    bars['va10_price_vs_val'] = (bars['mid'] - bars['va10_val']) / atr_safe
+    bars['va10_price_vs_poc'] = bars['mid'] - bars['va10_poc']
+    bars['va10_price_vs_vah'] = bars['mid'] - bars['va10_vah']
+    bars['va10_price_vs_val'] = bars['mid'] - bars['va10_val']
 
     va_valid = bars['va10_poc'].notna()
     bars['va10_in_value_area'] = np.where(
@@ -587,9 +582,13 @@ def add_value_area_features(bars, lookback=10, value_area_pct=0.70, min_volume=5
     bars['va10_below_val'] = np.where(
         va_valid, (mid_prices < val_arr).astype(float), np.nan
     )
-    bars['va10_va_width'] = (bars['va10_vah'] - bars['va10_val']) / atr_safe
+    bars['va10_va_width'] = bars['va10_vah'] - bars['va10_val']
     bars['va10_volume_at_price'] = vol_at_price_arr
     bars['va10_price_percentile'] = price_pct_arr
+
+    for p in (1, 3, 5, 10):
+        poc_ma = bars['va10_poc'].rolling(p, min_periods=p).mean()
+        bars[f'va10_poc_ma_chg_{p}'] = poc_ma.diff(p) / p
 
     return bars
 

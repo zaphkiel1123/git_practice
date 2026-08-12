@@ -72,14 +72,17 @@ def compute_features_for_file(filepath, window='1min'):
 
 
 def generate_signal(bars, feature_cols, signal_model, vol_model, quality_model,
+                    filter_feature_cols=None,
                     rr_ratio=1.5, signal_threshold=0.55, quality_threshold=0.50,
                     sl_multiplier=1.5, min_sl=2.0, max_sl=8.0, core_config=None):
     """Generate signal for the latest bar."""
     if len(bars) == 0:
         return None
 
+    filter_feature_cols = filter_feature_cols or feature_cols
     latest = bars.iloc[-1:]
     X = latest[feature_cols].values
+    X_filter = latest[filter_feature_cols].values
 
     # Check RTH
     rth = is_rth(latest.index)
@@ -128,9 +131,9 @@ def generate_signal(bars, feature_cols, signal_model, vol_model, quality_model,
     # Quality filter
     if quality_model is not None:
         if hasattr(quality_model, 'predict_proba'):
-            q_prob = quality_model.predict_proba(X)[0][1]
+            q_prob = quality_model.predict_proba(X_filter)[0][1]
         else:
-            q_prob = float(quality_model.predict(X)[0])
+            q_prob = float(quality_model.predict(X_filter)[0])
         if q_prob < quality_threshold:
             return {
                 'signal': 'NO_TRADE',
@@ -143,7 +146,7 @@ def generate_signal(bars, feature_cols, signal_model, vol_model, quality_model,
 
     # Compute SL from volatility model
     if vol_model is not None:
-        pred_atr = vol_model.predict(X)[0]
+        pred_atr = vol_model.predict(X_filter)[0]
         sl_points = np.clip(pred_atr * sl_multiplier, min_sl, max_sl)
     else:
         sl_points = float(latest['atr_14'].iloc[0]) * sl_multiplier
@@ -179,7 +182,8 @@ def generate_signal(bars, feature_cols, signal_model, vol_model, quality_model,
 def watch_mode(models_dir, watch_dir, window, rr_ratio, signal_threshold, quality_threshold):
     """Continuously watch for new data and emit signals."""
     signal_model, vol_model, quality_model, meta = load_models(models_dir)
-    feature_cols = meta['feature_columns']
+    feature_cols = meta.get('signal_feature_columns', meta['feature_columns'])
+    filter_feature_cols = meta.get('filter_feature_columns', feature_cols)
     core_config = meta.get('core_feature_config', DEFAULT_CORE_CONFIG)
 
     print(f"Watching {watch_dir} for .data file changes...")
@@ -209,6 +213,7 @@ def watch_mode(models_dir, watch_dir, window, rr_ratio, signal_threshold, qualit
 
             signal = generate_signal(
                 bars, feature_cols, signal_model, vol_model, quality_model,
+                filter_feature_cols=filter_feature_cols,
                 rr_ratio=rr_ratio, signal_threshold=signal_threshold,
                 quality_threshold=quality_threshold, core_config=core_config,
             )
@@ -229,7 +234,8 @@ def watch_mode(models_dir, watch_dir, window, rr_ratio, signal_threshold, qualit
 def single_file_mode(models_dir, filepath, window, rr_ratio, signal_threshold, quality_threshold, tail_n):
     """Process a single file and show recent signals."""
     signal_model, vol_model, quality_model, meta = load_models(models_dir)
-    feature_cols = meta['feature_columns']
+    feature_cols = meta.get('signal_feature_columns', meta['feature_columns'])
+    filter_feature_cols = meta.get('filter_feature_columns', feature_cols)
     core_config = meta.get('core_feature_config', DEFAULT_CORE_CONFIG)
 
     print(f"Processing: {filepath}")
@@ -249,6 +255,7 @@ def single_file_mode(models_dir, filepath, window, rr_ratio, signal_threshold, q
             continue
         sig = generate_signal(
             bar_slice, feature_cols, signal_model, vol_model, quality_model,
+            filter_feature_cols=filter_feature_cols,
             rr_ratio=rr_ratio, signal_threshold=signal_threshold,
             quality_threshold=quality_threshold, core_config=core_config,
         )

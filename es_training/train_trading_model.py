@@ -53,6 +53,11 @@ warnings.filterwarnings('ignore', category=UserWarning)
 
 TICK_SIZE = 0.25
 
+# ATR features are for trade-quality filtering and SL sizing only — not direction.
+ATR_FILTER_FEATURES = frozenset({
+    'atr_5', 'atr_14', 'atr_ratio', 'range_vs_atr',
+})
+
 
 # ============================================================
 # Enhanced Feature Engineering
@@ -257,9 +262,9 @@ def walk_forward_split(n, n_folds=5, min_train_ratio=0.5):
 # Model Training Functions
 # ============================================================
 
-def get_feature_columns(df):
-    """Feature columns: everything except labels, metadata, raw OHLC, and pruned groups."""
-    exclude = {
+def _base_feature_exclude():
+    """Columns excluded from all model feature matrices."""
+    return {
         # Labels and metadata
         'trade_label', 'long_result', 'short_result',
         'long_bars_held', 'short_bars_held',
@@ -297,7 +302,23 @@ def get_feature_columns(df):
         # Raw VA levels (not normalized)
         'va10_poc', 'va10_vah', 'va10_val',
     }
+
+
+def get_signal_feature_columns(df):
+    """Direction model features — no ATR (volatility is for filter/SL only)."""
+    exclude = _base_feature_exclude() | ATR_FILTER_FEATURES
     return [c for c in df.columns if c not in exclude and not c.startswith('_')]
+
+
+def get_filter_feature_columns(df):
+    """Quality and volatility model features — includes ATR for filtering and SL sizing."""
+    exclude = _base_feature_exclude()
+    return [c for c in df.columns if c not in exclude and not c.startswith('_')]
+
+
+def get_feature_columns(df):
+    """Backward-compatible alias for signal (direction) features."""
+    return get_signal_feature_columns(df)
 
 
 def train_entry_signal_model(X_train, y_train, X_test, y_test, feature_names):
@@ -492,14 +513,17 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
         output_dir = os.path.join(_SCRIPT_DIR, 'data', 'models')
     os.makedirs(output_dir, exist_ok=True)
 
-    feature_cols = get_feature_columns(bars)
-    print(f"\nFeature columns: {len(feature_cols)}")
+    feature_cols = get_signal_feature_columns(bars)
+    filter_feature_cols = get_filter_feature_columns(bars)
+    print(f"\nSignal feature columns: {len(feature_cols)}")
+    print(f"Filter feature columns (quality/vol): {len(filter_feature_cols)}")
 
     # Filter to RTH only for training signal/quality models
     rth_mask = bars['is_rth'].values.astype(bool)
     print(f"RTH bars: {rth_mask.sum()} / {len(bars)} ({100*rth_mask.sum()/len(bars):.1f}%)")
 
-    X_all = bars[feature_cols].values
+    X_signal = bars[feature_cols].values
+    X_filter = bars[filter_feature_cols].values
     y_signal = bars['trade_label'].values
     y_atr = bars['atr_target'].values
     y_quality = bars['quality_label'].values
@@ -523,8 +547,8 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
         actual_te = rth_indices[te_idx]
 
         model, metrics = train_entry_signal_model(
-            X_all[actual_tr], y_signal[actual_tr],
-            X_all[actual_te], y_signal[actual_te],
+            X_signal[actual_tr], y_signal[actual_tr],
+            X_signal[actual_te], y_signal[actual_te],
             feature_cols
         )
         signal_metrics.append(metrics)
@@ -550,9 +574,9 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
 
     for fold_idx, (tr_idx, te_idx) in enumerate(vol_splits):
         model, metrics = train_volatility_model(
-            X_all[tr_idx], y_atr[tr_idx],
-            X_all[te_idx], y_atr[te_idx],
-            feature_cols
+            X_filter[tr_idx], y_atr[tr_idx],
+            X_filter[te_idx], y_atr[te_idx],
+            filter_feature_cols
         )
         if metrics is None:
             continue
@@ -586,9 +610,9 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
             actual_te = trade_rth_indices[te_idx]
 
             model, metrics = train_quality_model(
-                X_all[actual_tr], y_quality[actual_tr],
-                X_all[actual_te], y_quality[actual_te],
-                feature_cols
+                X_filter[actual_tr], y_quality[actual_tr],
+                X_filter[actual_te], y_quality[actual_te],
+                filter_feature_cols
             )
             if metrics is None:
                 continue
@@ -623,7 +647,7 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
         top_idx = np.argsort(imp)[::-1][:15]
         print("\n  Trade Quality Model (top 15):")
         for rank, idx in enumerate(top_idx, 1):
-            print(f"    {rank:2d}. {feature_cols[idx]:<30} {imp[idx]:.0f}")
+            print(f"    {rank:2d}. {filter_feature_cols[idx]:<30} {imp[idx]:.0f}")
 
     # ---- Save Models ----
     print(f"\n{'='*60}")
@@ -653,6 +677,8 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
     # Save feature column list
     meta = {
         'feature_columns': feature_cols,
+        'signal_feature_columns': feature_cols,
+        'filter_feature_columns': filter_feature_cols,
         'window': window,
         'rr_ratio': rr_ratio,
         'max_hold_bars': max_hold_bars,
@@ -683,7 +709,7 @@ def run_training(data_dir, window='1min', rr_ratio=1.5, max_hold_bars=60,
 
     # ---- Trading Pattern Report ----
     if best_signal_model:
-        _generate_pattern_report(best_signal_model, X_all, y_signal, feature_cols,
+        _generate_pattern_report(best_signal_model, X_signal, y_signal, feature_cols,
                                  rth_indices, bars.index, output_dir)
 
     return bars, best_signal_model, best_vol_model, best_quality_model
@@ -937,10 +963,10 @@ def _get_feature_description(fname):
 
         # Volatility/Range
         'bar_range': "High - low of this bar in points.",
-        'atr_5': "Average True Range over 5 bars. Short-term volatility.",
-        'atr_14': "Average True Range over 14 bars. Standard volatility measure.",
-        'atr_ratio': "atr_5 / atr_14. >1 = volatility expanding, <1 = contracting.",
-        'range_vs_atr': "bar_range / atr_14. >1.5 = unusually large bar, <0.5 = unusually small.",
+        'atr_5': "Average True Range over 5 bars. Used by quality/vol models only (not direction).",
+        'atr_14': "Average True Range over 14 bars. Used by quality/vol models for trade filtering and SL sizing.",
+        'atr_ratio': "atr_5 / atr_14. >1 = volatility expanding, <1 = contracting. Filter model only.",
+        'range_vs_atr': "bar_range / atr_14. >1.5 = unusually large bar. Filter model only.",
         'range_ma_5': "5-bar mean of bar_range.",
         'range_ma_20': "20-bar mean of bar_range. Baseline range.",
         'consolidation': "range_ma_5 / range_ma_20. <0.7 = narrowing (consolidation), >1.3 = expanding (breakout).",
@@ -976,15 +1002,19 @@ def _get_feature_description(fname):
         'vol_trend_5': "Discrete volume trend over 5 bars: +1 (increasing >10%), -1 (decreasing >10%), 0 (flat).",
 
         # Value area (10-bar cumulative volume profile)
-        'va10_price_vs_poc': "(mid - POC) / ATR_14. Price relative to 10-bar cumulative fair value. Positive = above POC.",
-        'va10_price_vs_vah': "(mid - VAH) / ATR_14. Positive = above value area high (breakout territory).",
-        'va10_price_vs_val': "(mid - VAL) / ATR_14. Negative = below value area low (breakdown territory).",
+        'va10_price_vs_poc': "mid - POC in points. Positive = above 10-bar fair value.",
+        'va10_price_vs_vah': "mid - VAH in points. Positive = above value area high.",
+        'va10_price_vs_val': "mid - VAL in points. Negative = below value area low.",
         'va10_in_value_area': "1 if current price is inside the 10-bar 70% value area (between VAL and VAH).",
         'va10_above_vah': "1 if current price is above value area high (potential breakout).",
         'va10_below_val': "1 if current price is below value area low (potential breakdown).",
-        'va10_va_width': "(VAH - VAL) / ATR_14. Width of accepted value range. Low = tight consolidation.",
+        'va10_va_width': "VAH - VAL in points. Width of accepted value range.",
         'va10_volume_at_price': "Volume at current price / max volume in 10-bar profile. High = at accepted value.",
         'va10_price_percentile': "Percentile of current price in 10-bar volume distribution. 0.5 = middle of range.",
+        'va10_poc_ma_chg_1': "1-bar POC velocity: poc.diff(1). Points per bar of fair-value drift.",
+        'va10_poc_ma_chg_3': "3-bar POC velocity: poc_ma_3.diff(3) / 3. Points per bar.",
+        'va10_poc_ma_chg_5': "5-bar POC velocity: poc_ma_5.diff(5) / 5. Points per bar.",
+        'va10_poc_ma_chg_10': "10-bar POC velocity: poc_ma_10.diff(10) / 10. Points per bar.",
     }
     return descriptions.get(fname, None)
 

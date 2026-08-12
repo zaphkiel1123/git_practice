@@ -260,7 +260,7 @@ def main():
     meta_path = os.path.join(args.models_dir, 'training_meta.json')
     with open(meta_path) as f:
         meta = json.load(f)
-    feature_cols = meta['feature_columns']
+    feature_cols = meta.get('signal_feature_columns', meta['feature_columns'])
 
     # Load features
     if args.features:
