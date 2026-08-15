@@ -48,19 +48,56 @@ from nn_model import create_model, count_parameters, HEAD_CLASSES
 def resolve_device(requested: str | None = None) -> torch.device:
     """Auto-detect best available device: XPU > CUDA > CPU."""
     if requested:
-        return torch.device(requested)
+        device = torch.device(requested)
+        _print_device_info(device)
+        return device
 
     try:
         import intel_extension_for_pytorch  # noqa: F401
         if torch.xpu.is_available():
-            return torch.device('xpu')
+            device = torch.device('xpu')
+            _print_device_info(device)
+            return device
     except (ImportError, AttributeError):
         pass
 
     if torch.cuda.is_available():
-        return torch.device('cuda')
+        device = torch.device('cuda')
+        _print_device_info(device)
+        return device
 
-    return torch.device('cpu')
+    device = torch.device('cpu')
+    _print_device_info(device)
+    return device
+
+
+def _print_device_info(device: torch.device):
+    """Print detailed device information."""
+    print(f"\n  {'='*50}")
+    print(f"  DEVICE INFO")
+    print(f"  {'='*50}")
+    if device.type == 'xpu':
+        name = torch.xpu.get_device_name(0)
+        mem = torch.xpu.get_device_properties(0).total_memory
+        print(f"  Using: Intel XPU (GPU)")
+        print(f"  Device: {name}")
+        print(f"  Memory: {mem / 1024**3:.1f} GB")
+    elif device.type == 'cuda':
+        name = torch.cuda.get_device_name(0)
+        mem = torch.cuda.get_device_properties(0).total_mem
+        print(f"  Using: NVIDIA CUDA (GPU)")
+        print(f"  Device: {name}")
+        print(f"  Memory: {mem / 1024**3:.1f} GB")
+        print(f"  CUDA version: {torch.version.cuda}")
+    else:
+        import multiprocessing
+        n_cores = multiprocessing.cpu_count()
+        print(f"  Using: CPU")
+        print(f"  Cores available: {n_cores}")
+        print(f"  No GPU detected (install intel-extension-for-pytorch for XPU,"
+              f" or CUDA toolkit for NVIDIA)")
+    print(f"  PyTorch version: {torch.__version__}")
+    print(f"  {'='*50}\n")
 
 
 # ============================================================
@@ -114,6 +151,20 @@ def compute_class_weights(labels: np.ndarray, n_classes: int) -> torch.Tensor:
 # Training Loop
 # ============================================================
 
+def _optimize_for_xpu(model: nn.Module, optimizer: torch.optim.Optimizer,
+                      device: torch.device) -> tuple[nn.Module, torch.optim.Optimizer]:
+    """Apply Intel Extension for PyTorch optimization for XPU devices."""
+    if device.type != 'xpu':
+        return model, optimizer
+    try:
+        import intel_extension_for_pytorch as ipex
+        model, optimizer = ipex.optimize(model, optimizer=optimizer)
+        print("  Applied ipex.optimize() for Intel XPU acceleration")
+    except (ImportError, Exception) as e:
+        print(f"  Warning: ipex.optimize() failed ({e}), running without XPU optimization")
+    return model, optimizer
+
+
 def train_one_epoch(model: nn.Module, loader: DataLoader,
                     optimizer: torch.optim.Optimizer,
                     criterion: nn.Module, device: torch.device) -> float:
@@ -134,6 +185,12 @@ def train_one_epoch(model: nn.Module, loader: DataLoader,
 
         total_loss += loss.item()
         n_batches += 1
+
+    # Synchronize XPU to get accurate timing
+    if device.type == 'xpu':
+        torch.xpu.synchronize()
+    elif device.type == 'cuda':
+        torch.cuda.synchronize()
 
     return total_loss / max(n_batches, 1)
 
@@ -161,6 +218,11 @@ def evaluate(model: nn.Module, loader: DataLoader,
         preds = logits.argmax(dim=1).cpu().numpy()
         all_preds.append(preds)
         all_labels.append(labels.cpu().numpy())
+
+    if device.type == 'xpu':
+        torch.xpu.synchronize()
+    elif device.type == 'cuda':
+        torch.cuda.synchronize()
 
     all_preds = np.concatenate(all_preds)
     all_labels = np.concatenate(all_labels)
@@ -231,14 +293,15 @@ def train_head(head: str, bars: pd.DataFrame, valid_mask: np.ndarray,
 
         # DataLoaders
         dl_workers = min(os.cpu_count() or 1, 4)
+        pin = (device.type == 'cuda')  # pin_memory only benefits CUDA, not XPU
         train_loader = DataLoader(
             train_ds, batch_size=config['batch_size'], shuffle=True,
-            num_workers=dl_workers, pin_memory=(device.type != 'cpu'),
+            num_workers=dl_workers, pin_memory=pin,
             persistent_workers=(dl_workers > 0),
         )
         val_loader = DataLoader(
             val_ds, batch_size=config['batch_size'], shuffle=False,
-            num_workers=dl_workers, pin_memory=(device.type != 'cpu'),
+            num_workers=dl_workers, pin_memory=pin,
             persistent_workers=(dl_workers > 0),
         )
 
@@ -256,6 +319,10 @@ def train_head(head: str, bars: pd.DataFrame, valid_mask: np.ndarray,
 
         optimizer = torch.optim.Adam(model.parameters(), lr=config['lr'],
                                      weight_decay=config.get('weight_decay', 1e-5))
+
+        # Apply Intel XPU optimization if on discrete GPU
+        model, optimizer = _optimize_for_xpu(model, optimizer, device)
+
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-6
         )
