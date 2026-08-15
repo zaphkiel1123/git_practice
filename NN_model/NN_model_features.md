@@ -165,8 +165,8 @@ Apply alternating filter: SH → SL → SH → SL (drop consecutive same-type).
 | `is_LL` | 1 if `last_swing_low < prev_swing_low` | 0/1 | Lower low |
 | `leg_size` | `last_swing_high - last_swing_low` | points | **Sequence** — last completed leg size |
 | `retrace_pct` | `(last_swing_high - close) / leg_size` in uptrend | [0, 1] | **Sequence** — pullback depth |
-| `bars_since_swing_high` | bars since last SH confirmed | integer | **Sequence** — scale ÷ 128 for NN |
-| `bars_since_swing_low` | bars since last SL confirmed | integer | **Sequence** — scale ÷ 128 for NN |
+| `bars_since_swing_high` | bars since last SH confirmed | integer | **Sequence** — scale ÷ 60 for NN |
+| `bars_since_swing_low` | bars since last SL confirmed | integer | **Sequence** — scale ÷ 60 for NN |
 | `dist_to_swing_high_pct` | `(last_swing_high - close) / leg_size × 100` | [0, 100] | **Sequence** — % of leg below SH |
 | `dist_to_swing_low_pct` | `(close - last_swing_low) / leg_size × 100` | [0, 100] | **Sequence** — % of leg above SL |
 | `is_HH` | 1 if `last_swing_high > prev_swing_high` | 0/1 | optional sequence / Part 2 |
@@ -303,7 +303,7 @@ def vp60_vol_at_close_pct(vp60, close, tick=TICK):
 
 ---
 
-All model inputs are a **single sequence tensor** per decision event: shape `(L, C)` where `L=128` bars, `C=` number of channels below.
+All model inputs are a **single sequence tensor** per decision event: shape `(L, C)` where `L=60` bars, `C=` number of channels below.
 
 ### Core sequence channels (C = 26)
 
@@ -348,7 +348,7 @@ All model inputs are a **single sequence tensor** per decision event: shape `(L,
 | Volatility / Regime | 4 |
 | **Total C** | **26** |
 
-Input tensor shape: **`(128, 26)`** per decision event.
+Input tensor shape: **`(60, 26)`** per decision event.
 
 ### What are `close_vs_poc`, `close_vs_vah`, `close_vs_val`? (channels #9–11)
 
@@ -483,7 +483,7 @@ Step 4:  rolling 60m merge → vp60_vol_at_close_pct (§1.9)
 Step 5:  swing detection → structure columns (leg_size, retrace_pct, dist_*_pct, bars_since_*)
 Step 6:  session time + volatility regime (§1.7, §1.8)
 Step 7:  decision points + labels
-Step 8:  sequence builder → (128, 26) numpy array per decision event
+Step 8:  sequence builder → (60, 26) numpy array per decision event
 Step 9:  train TCN/LSTM on sequences + walk-forward validation
 Step 10: add Part 2 channels one at a time, measure lift
 ```

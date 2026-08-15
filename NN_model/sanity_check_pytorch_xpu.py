@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 
 # --- Spec constants (from NN_model_features.md / NN_model_labels.md) ---
-SEQ_LEN = 128
+SEQ_LEN = 60
 NUM_CHANNELS = 26
 HEAD_A_CLASSES = 3  # strong_long_opp, strong_short_opp, no_edge
 HEAD_B_CLASSES = 3  # expansion, normal, contraction
