@@ -154,27 +154,37 @@ def build_sanity_model(torch):
 
 
 def synthetic_batch(torch, device, batch_size: int):
-    """Random tensor with plausible value ranges for core channels."""
-    x = torch.randn(batch_size, SEQ_LEN, NUM_CHANNELS, device=device)
+    """Random tensor with plausible value ranges for core channels.
+
+    Build on CPU then transfer to device. Intel XPU (Level Zero) can reject
+    in-place slice writes and bool-mask ops directly on the device.
+    """
+    x = torch.randn(batch_size, SEQ_LEN, NUM_CHANNELS)
 
     # clv [0, 1]
-    x[:, :, 2] = torch.rand(batch_size, SEQ_LEN, device=device)
+    x[:, :, 2] = torch.rand(batch_size, SEQ_LEN)
     # buy_volume_pct [0, 1]
-    x[:, :, 6] = torch.rand(batch_size, SEQ_LEN, device=device)
+    x[:, :, 6] = torch.rand(batch_size, SEQ_LEN)
     # volume_delta_pct [-1, 1]
-    x[:, :, 5] = torch.rand(batch_size, SEQ_LEN, device=device) * 2 - 1
-    # binary flags
+    x[:, :, 5] = torch.rand(batch_size, SEQ_LEN) * 2 - 1
+    # binary flags — use randint, not (rand > 0.5).float() (XPU-unfriendly)
     for idx in (11, 12, 13):
-        x[:, :, idx] = (torch.rand(batch_size, SEQ_LEN, device=device) > 0.5).float()
+        x[:, :, idx] = torch.randint(0, 2, (batch_size, SEQ_LEN), dtype=torch.float32)
     # vp60_vol_at_close_pct [0, 100]
-    x[:, :, 14] = torch.rand(batch_size, SEQ_LEN, device=device) * 100
+    x[:, :, 14] = torch.rand(batch_size, SEQ_LEN) * 100
     # atr_percentile_20d [0, 1]
-    x[:, :, 25] = torch.rand(batch_size, SEQ_LEN, device=device)
+    x[:, :, 25] = torch.rand(batch_size, SEQ_LEN)
 
-    y_a = torch.randint(0, HEAD_A_CLASSES, (batch_size,), device=device)
-    y_b = torch.randint(0, HEAD_B_CLASSES, (batch_size,), device=device)
-    y_c = torch.randint(0, HEAD_C_CLASSES, (batch_size,), device=device)
-    return x, y_a, y_b, y_c
+    y_a = torch.randint(0, HEAD_A_CLASSES, (batch_size,))
+    y_b = torch.randint(0, HEAD_B_CLASSES, (batch_size,))
+    y_c = torch.randint(0, HEAD_C_CLASSES, (batch_size,))
+
+    return (
+        x.to(device),
+        y_a.to(device),
+        y_b.to(device),
+        y_c.to(device),
+    )
 
 
 def run_training_step(torch, ipex, device, batch_size: int, steps: int) -> list[CheckResult]:
