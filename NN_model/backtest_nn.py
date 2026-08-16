@@ -117,7 +117,7 @@ HEAD_CLASS_NAMES = {
     'A': ['strong_long_opp', 'strong_short_opp', 'no_edge'],
     'B': ['expansion', 'normal', 'contraction'],
     'C': ['continuation', 'retracement', 'reversal', 'chop'],
-    'D': ['long_2R_win', 'long_1R_win', 'long_stopped', 'short_2R_win', 'short_1R_win', 'short_stopped', 'no_trigger'],
+    'D': ['long_2R_win', 'short_2R_win', 'no_trigger'],
 }
 
 

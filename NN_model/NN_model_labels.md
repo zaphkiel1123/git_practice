@@ -202,7 +202,9 @@ def label_regime(close_t, highs_future, lows_future, close_future_H,
 
 ## Group D — Risk-Reward Outcome / R-multiple
 
-Simulates a hypothetical trade from bar `t` and labels it by which exit was hit first: stop loss, 1R target, or 2R target. Unlike Group A (which only looks at MFE), this group accounts for **adverse excursion along the path** — a bar can have large MFE but still get stopped out if price dips to the stop level before reaching the target.
+Simulates a hypothetical trade from bar `t` and checks whether price hit a **2R target** before getting stopped out. Unlike Group A (which only looks at MFE), this group accounts for **adverse excursion along the path** — a bar can have large MFE but still get stopped out if price dips to the stop level before reaching the target.
+
+Only 2R wins are labeled as opportunities. Everything else — stopped out, only reached 1R, or no movement — is `no_trigger`.
 
 ### Stop and target placement
 
@@ -219,7 +221,6 @@ if risk_long < 0.3 * ATR_14 or risk_long > 2.0 * ATR_14:
     use ATR fallback: SL_long = close[t] - 1.0 * ATR_14
     risk_long = 1.0 * ATR_14
 
-TP_1R_long = close[t] + 1.0 * risk_long  # 1R target
 TP_2R_long = close[t] + 2.0 * risk_long  # 2R target
 ```
 
@@ -233,88 +234,60 @@ if risk_short < 0.3 * ATR_14 or risk_short > 2.0 * ATR_14:
     use ATR fallback: SL_short = close[t] + 1.0 * ATR_14
     risk_short = 1.0 * ATR_14
 
-TP_1R_short = close[t] - 1.0 * risk_short
 TP_2R_short = close[t] - 2.0 * risk_short
 ```
 
 ### Label assignment — scan bars sequentially
 
-Walk through future bars `[t+1 .. t+H]` **in order** and check which level is hit first. The sequential scan matters because a bar might touch both the stop and target — the one hit first (by checking the high/low within the bar) determines the label.
+Walk through future bars `[t+1 .. t+H]` **in order** and check whether the 2R target or the stop is hit first. The sequential scan matters because a bar might touch both — the one hit first determines the label.
 
 **Long side scan for each future bar `j` in `[t+1 .. t+H]`:**
 
 ```
-if low[j] <= SL_long   → long is stopped out, stop scanning long
-if high[j] >= TP_2R_long → long hit 2R, stop scanning long
-if high[j] >= TP_1R_long → long hit 1R (continue scanning for 2R)
+if low[j] <= SL_long    → long is stopped out, stop scanning
+if high[j] >= TP_2R_long → long hit 2R, stop scanning
 ```
 
-**When both stop and target could be hit in the same bar** (e.g., `low[j] <= SL` and `high[j] >= TP_1R`): assume the **stop was hit first** (conservative). This avoids overstating win rates.
+**When both stop and target could be hit in the same bar** (e.g., `low[j] <= SL` and `high[j] >= TP_2R`): assume the **stop was hit first** (conservative). This avoids overstating win rates.
 
 Same logic mirrored for the short side.
 
-### 7-class label
+### 3-class label
 
 | Label | Value | Condition |
 |-------|-------|-----------|
 | `long_2R_win` | 0 | Long side hit 2R target before stop |
-| `long_1R_win` | 1 | Long side hit 1R target before stop, but not 2R within H bars |
-| `long_stopped` | 2 | Long side hit stop before any target |
-| `short_2R_win` | 3 | Short side hit 2R target before stop |
-| `short_1R_win` | 4 | Short side hit 1R target before stop, but not 2R within H bars |
-| `short_stopped` | 5 | Short side hit stop before any target |
-| `no_trigger` | 6 | Neither stop nor target hit on either side within H bars |
+| `short_2R_win` | 1 | Short side hit 2R target before stop |
+| `no_trigger` | 2 | Everything else: stopped out on both sides, only reached 1R, or no level hit within H bars |
 
-**Resolving conflicts when both long and short produce a result:**
-- If both sides hit 2R: assign the side that hit first (earlier bar index)
-- If one side hits 2R and the other hits 1R: assign the 2R side
-- If both sides stopped: assign `no_trigger` (no tradeable setup existed)
-- If one side wins and the other stops: assign the winning side
-
-Priority: `2R_win > 1R_win > no_trigger > stopped`
+**Resolving conflicts when both long and short hit 2R:** assign the side that hit first (earlier bar index). If same bar, prefer long (arbitrary tie-break).
 
 ### Label computation (Python reference)
 
 ```python
-def _scan_side(close_t, highs_future, lows_future, sl, tp_1r, tp_2r, is_long):
+def _scan_side_2r(highs_future, lows_future, sl, tp_2r, is_long):
     """
     Scan future bars for a single side (long or short).
-    Returns: (outcome, bar_index)
-        outcome: '2R', '1R', 'stopped', or 'none'
-        bar_index: index within highs_future where outcome was determined
+    Returns: (hit_2r: bool, bar_index: int)
+        hit_2r:    True if 2R target was hit before stop
+        bar_index: index within future arrays where 2R was hit (-1 if not)
     """
-    hit_1r = False
-    hit_1r_bar = -1
-
     for j in range(len(highs_future)):
         if is_long:
             stopped = lows_future[j] <= sl
             hit_2r  = highs_future[j] >= tp_2r
-            hit_1r_now = highs_future[j] >= tp_1r
         else:
             stopped = highs_future[j] >= sl
             hit_2r  = lows_future[j] <= tp_2r
-            hit_1r_now = lows_future[j] <= tp_1r
 
-        # Same-bar conflict: assume stop hit first (conservative)
         if stopped and hit_2r:
-            return ('stopped', j)
-        if stopped and hit_1r_now and not hit_1r:
-            return ('stopped', j)
-
-        if hit_2r:
-            return ('2R', j)
-
+            return (False, -1)   # same-bar conflict → assume stopped first
         if stopped:
-            return ('stopped', j)
+            return (False, -1)   # stopped before 2R
+        if hit_2r:
+            return (True, j)     # 2R hit cleanly
 
-        if hit_1r_now and not hit_1r:
-            hit_1r = True
-            hit_1r_bar = j
-
-    if hit_1r:
-        return ('1R', hit_1r_bar)
-    return ('none', -1)
+    return (False, -1)           # neither stop nor 2R hit within H bars
 
 
 def label_rr_outcome(close_t, highs_future, lows_future,
@@ -326,7 +299,7 @@ def label_rr_outcome(close_t, highs_future, lows_future,
     last_swing_low:   most recent confirmed swing low price at bar t
     last_swing_high:  most recent confirmed swing high price at bar t
     atr_14:           ATR(14) at bar t
-    Returns:          integer label 0–6
+    Returns:          integer label 0–2
     """
     # --- Long side setup ---
     sl_long = last_swing_low - 0.25
@@ -334,7 +307,6 @@ def label_rr_outcome(close_t, highs_future, lows_future,
     if risk_long < 0.3 * atr_14 or risk_long > 2.0 * atr_14:
         risk_long = 1.0 * atr_14
         sl_long = close_t - risk_long
-    tp_1r_long = close_t + risk_long
     tp_2r_long = close_t + 2.0 * risk_long
 
     # --- Short side setup ---
@@ -343,49 +315,24 @@ def label_rr_outcome(close_t, highs_future, lows_future,
     if risk_short < 0.3 * atr_14 or risk_short > 2.0 * atr_14:
         risk_short = 1.0 * atr_14
         sl_short = close_t + risk_short
-    tp_1r_short = close_t - risk_short
     tp_2r_short = close_t - 2.0 * risk_short
 
     # --- Scan both sides ---
-    long_out, long_bar = _scan_side(
-        close_t, highs_future, lows_future,
-        sl_long, tp_1r_long, tp_2r_long, is_long=True
+    long_hit, long_bar = _scan_side_2r(
+        highs_future, lows_future, sl_long, tp_2r_long, is_long=True
     )
-    short_out, short_bar = _scan_side(
-        close_t, highs_future, lows_future,
-        sl_short, tp_1r_short, tp_2r_short, is_long=False
+    short_hit, short_bar = _scan_side_2r(
+        highs_future, lows_future, sl_short, tp_2r_short, is_long=False
     )
 
-    # --- Resolve conflicts ---
-    rank = {'2R': 3, '1R': 2, 'none': 1, 'stopped': 0}
-
-    if rank[long_out] > rank[short_out]:
-        winner_side, winner_out = 'long', long_out
-    elif rank[short_out] > rank[long_out]:
-        winner_side, winner_out = 'short', short_out
-    elif long_out == short_out:
-        # Tie-break: whichever hit first; if same bar, prefer long (arbitrary)
-        if long_out == 'none':
-            return 6  # no_trigger
-        if long_out == 'stopped':
-            return 6  # both stopped → no tradeable setup
-        winner_side = 'long' if long_bar <= short_bar else 'short'
-        winner_out = long_out
-    else:
-        winner_side, winner_out = 'long', long_out
-
-    # --- Map to label ---
-    label_map = {
-        ('long',  '2R'):      0,  # long_2R_win
-        ('long',  '1R'):      1,  # long_1R_win
-        ('long',  'stopped'): 2,  # long_stopped
-        ('short', '2R'):      3,  # short_2R_win
-        ('short', '1R'):      4,  # short_1R_win
-        ('short', 'stopped'): 5,  # short_stopped
-        ('long',  'none'):    6,  # no_trigger
-        ('short', 'none'):    6,  # no_trigger
-    }
-    return label_map[(winner_side, winner_out)]
+    # --- Resolve ---
+    if long_hit and short_hit:
+        return 0 if long_bar <= short_bar else 1   # tie-break: earlier hit wins
+    if long_hit:
+        return 0   # long_2R_win
+    if short_hit:
+        return 1   # short_2R_win
+    return 2       # no_trigger
 ```
 
 ### Why this group is different from Group A
@@ -395,24 +342,20 @@ def label_rr_outcome(close_t, highs_future, lows_future,
 | What it measures | Best-case upside only | Full trade simulation (entry → SL or TP) |
 | Adverse excursion | Ignored | Determines the label — getting stopped out before TP matters |
 | Stop placement | Not part of label | Baked into label via `last_swing_low` / `last_swing_high` |
-| Actionability | "Was there a move?" | "Would this trade have worked?" |
+| Actionability | "Was there a move?" | "Would this trade have worked at 2R?" |
 | Path dependency | No — only checks max(high) and min(low) | Yes — scans bar-by-bar in sequence |
 
-Group A can label a bar as `strong_long_opp` even if price first dropped 2 ATR (hitting any reasonable stop) before rallying. Group D would correctly label that as `long_stopped`.
+Group A can label a bar as `strong_long_opp` even if price first dropped 2 ATR (hitting any reasonable stop) before rallying. Group D would correctly label that as `no_trigger`.
 
 ### Expected class distribution
 
 | Label | Expected % | Notes |
 |-------|-----------|-------|
-| `no_trigger` | ~30–40% | Many bars are range-bound within H=60 |
-| `long_stopped` | ~10–15% | |
-| `short_stopped` | ~10–15% | |
-| `long_1R_win` | ~8–12% | |
-| `short_1R_win` | ~8–12% | |
-| `long_2R_win` | ~5–8% | Least common — requires sustained directional move |
-| `short_2R_win` | ~5–8% | |
+| `no_trigger` | ~75–85% | Includes stopped, 1R-only, and flat bars |
+| `long_2R_win` | ~7–12% | Requires sustained directional move without hitting stop first |
+| `short_2R_win` | ~7–12% | |
 
-Use class weights or focal loss. The 2R classes are the most valuable and rarest.
+Use class weights or focal loss (gamma=2). The 2R classes are the most valuable and rarest.
 
 ---
 
@@ -426,7 +369,7 @@ Train three **separate models**, each with the same encoder architecture but a s
 Run 1:  Input (128, 26) → Encoder → Head A (Linear → 3 classes)   loss = CE_A
 Run 2:  Input (128, 26) → Encoder → Head B (Linear → 3 classes)   loss = CE_B
 Run 3:  Input (128, 26) → Encoder → Head C (Linear → 4 classes)   loss = CE_C
-Run 4:  Input (128, 26) → Encoder → Head D (Linear → 7 classes)   loss = CE_D
+Run 4:  Input (128, 26) → Encoder → Head D (Linear → 3 classes)   loss = CE_D
 ```
 
 Each run is a standalone model trained from scratch with `loss = 1.0 * CE` for its own head. No weight sharing between runs. Group D requires `last_swing_low` and `last_swing_high` from the feature pipeline for stop placement during label computation.
@@ -492,7 +435,7 @@ If the primary head's validation accuracy improves with auxiliaries, the multi-t
 | A | no_edge ~85%, strong_long ~7%, strong_short ~8% | Class weights or focal loss (gamma=2) |
 | B | normal ~55%, expansion ~25%, contraction ~20% | Mild class weights |
 | C | chop ~50%, continuation ~20%, retracement ~18%, reversal ~12% | Class weights |
-| D | no_trigger ~35%, stopped ~25%, 1R_win ~20%, 2R_win ~13% (approx, split across long/short) | Class weights or focal loss (gamma=2) |
+| D | no_trigger ~80%, long_2R_win ~10%, short_2R_win ~10% | Class weights or focal loss (gamma=2) |
 
 ### Exclusion rules
 

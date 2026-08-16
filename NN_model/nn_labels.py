@@ -315,59 +315,42 @@ def _compute_labels_c_chunk(args: tuple) -> tuple:
 
 
 # ============================================================
-# Group D — R-Multiple Outcome (7 classes)
+# Group D — R-Multiple Outcome (3 classes)
 # ============================================================
 # 0: long_2R_win
-# 1: long_1R_win
-# 2: long_stopped
-# 3: short_2R_win
-# 4: short_1R_win
-# 5: short_stopped
-# 6: no_trigger
+# 1: short_2R_win
+# 2: no_trigger (stopped, 1R-only, or no level hit)
 
-def _scan_side(highs_future: np.ndarray, lows_future: np.ndarray,
-               sl: float, tp_1r: float, tp_2r: float, is_long: bool) -> tuple:
+def _scan_side_2r(highs_future: np.ndarray, lows_future: np.ndarray,
+                  sl: float, tp_2r: float, is_long: bool) -> tuple:
     """
     Scan future bars for a single side (long or short).
-    Returns (outcome, bar_index).
+    Returns (hit_2r, bar_index).
+        hit_2r:    True if 2R target was hit before stop
+        bar_index: index where 2R was hit (-1 if not)
     """
-    hit_1r = False
-    hit_1r_bar = -1
-
     for j in range(len(highs_future)):
         if is_long:
             stopped = lows_future[j] <= sl
             hit_2r = highs_future[j] >= tp_2r
-            hit_1r_now = highs_future[j] >= tp_1r
         else:
             stopped = highs_future[j] >= sl
             hit_2r = lows_future[j] <= tp_2r
-            hit_1r_now = lows_future[j] <= tp_1r
 
         # Same-bar conflict: assume stop hit first (conservative)
         if stopped and hit_2r:
-            return ('stopped', j)
-        if stopped and hit_1r_now and not hit_1r:
-            return ('stopped', j)
-
-        if hit_2r:
-            return ('2R', j)
-
+            return (False, -1)
         if stopped:
-            return ('stopped', j)
+            return (False, -1)
+        if hit_2r:
+            return (True, j)
 
-        if hit_1r_now and not hit_1r:
-            hit_1r = True
-            hit_1r_bar = j
-
-    if hit_1r:
-        return ('1R', hit_1r_bar)
-    return ('none', -1)
+    return (False, -1)
 
 
 def _label_rr_outcome(close_t: float, highs_future: np.ndarray, lows_future: np.ndarray,
                       last_swing_low: float, last_swing_high: float, atr_14: float) -> int:
-    """Compute Group D label for a single bar."""
+    """Compute Group D label for a single bar. Returns 0, 1, or 2."""
     if np.isnan(last_swing_low) or np.isnan(last_swing_high) or atr_14 <= 0:
         return -1
 
@@ -377,7 +360,6 @@ def _label_rr_outcome(close_t: float, highs_future: np.ndarray, lows_future: np.
     if risk_long < 0.3 * atr_14 or risk_long > 2.0 * atr_14:
         risk_long = 1.0 * atr_14
         sl_long = close_t - risk_long
-    tp_1r_long = close_t + risk_long
     tp_2r_long = close_t + 2.0 * risk_long
 
     # Short side setup
@@ -386,43 +368,22 @@ def _label_rr_outcome(close_t: float, highs_future: np.ndarray, lows_future: np.
     if risk_short < 0.3 * atr_14 or risk_short > 2.0 * atr_14:
         risk_short = 1.0 * atr_14
         sl_short = close_t + risk_short
-    tp_1r_short = close_t - risk_short
     tp_2r_short = close_t - 2.0 * risk_short
 
     # Scan both sides
-    long_out, long_bar = _scan_side(highs_future, lows_future,
-                                    sl_long, tp_1r_long, tp_2r_long, is_long=True)
-    short_out, short_bar = _scan_side(highs_future, lows_future,
-                                      sl_short, tp_1r_short, tp_2r_short, is_long=False)
+    long_hit, long_bar = _scan_side_2r(highs_future, lows_future,
+                                       sl_long, tp_2r_long, is_long=True)
+    short_hit, short_bar = _scan_side_2r(highs_future, lows_future,
+                                         sl_short, tp_2r_short, is_long=False)
 
-    # Resolve conflicts
-    rank = {'2R': 3, '1R': 2, 'none': 1, 'stopped': 0}
-
-    if rank[long_out] > rank[short_out]:
-        winner_side, winner_out = 'long', long_out
-    elif rank[short_out] > rank[long_out]:
-        winner_side, winner_out = 'short', short_out
-    elif long_out == short_out:
-        if long_out == 'none':
-            return 6  # no_trigger
-        if long_out == 'stopped':
-            return 6  # both stopped
-        winner_side = 'long' if long_bar <= short_bar else 'short'
-        winner_out = long_out
-    else:
-        winner_side, winner_out = 'long', long_out
-
-    label_map = {
-        ('long', '2R'): 0,
-        ('long', '1R'): 1,
-        ('long', 'stopped'): 2,
-        ('short', '2R'): 3,
-        ('short', '1R'): 4,
-        ('short', 'stopped'): 5,
-        ('long', 'none'): 6,
-        ('short', 'none'): 6,
-    }
-    return label_map[(winner_side, winner_out)]
+    # Resolve
+    if long_hit and short_hit:
+        return 0 if long_bar <= short_bar else 1
+    if long_hit:
+        return 0  # long_2R_win
+    if short_hit:
+        return 1  # short_2R_win
+    return 2      # no_trigger
 
 
 def _compute_labels_d_chunk(args: tuple) -> tuple:
@@ -556,7 +517,7 @@ def compute_all_labels(bars: pd.DataFrame, n_workers: int = 0,
 
     # Print distribution
     for name, lbl, n_cls in [('A (MFE)', label_a, 3), ('B (Vol)', label_b, 3),
-                              ('C (Dir)', label_c, 4), ('D (R-mult)', label_d, 7)]:
+                              ('C (Dir)', label_c, 4), ('D (R-mult)', label_d, 3)]:
         valid = lbl[lbl >= 0]
         print(f"    Group {name}: {len(valid)} valid samples")
         for c in range(n_cls):

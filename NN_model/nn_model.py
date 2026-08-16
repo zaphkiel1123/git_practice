@@ -172,7 +172,7 @@ HEAD_CLASSES = {
     'A': 3,  # strong_long_opp, strong_short_opp, no_edge
     'B': 3,  # expansion, normal, contraction
     'C': 4,  # continuation, retracement, reversal, chop
-    'D': 7,  # long_2R_win, long_1R_win, long_stopped, short_2R_win, short_1R_win, short_stopped, no_trigger
+    'D': 3,  # long_2R_win, short_2R_win, no_trigger
 }
 
 
