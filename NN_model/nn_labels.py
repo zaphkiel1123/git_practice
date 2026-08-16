@@ -315,6 +315,139 @@ def _compute_labels_c_chunk(args: tuple) -> tuple:
 
 
 # ============================================================
+# Group D — R-Multiple Outcome (7 classes)
+# ============================================================
+# 0: long_2R_win
+# 1: long_1R_win
+# 2: long_stopped
+# 3: short_2R_win
+# 4: short_1R_win
+# 5: short_stopped
+# 6: no_trigger
+
+def _scan_side(highs_future: np.ndarray, lows_future: np.ndarray,
+               sl: float, tp_1r: float, tp_2r: float, is_long: bool) -> tuple:
+    """
+    Scan future bars for a single side (long or short).
+    Returns (outcome, bar_index).
+    """
+    hit_1r = False
+    hit_1r_bar = -1
+
+    for j in range(len(highs_future)):
+        if is_long:
+            stopped = lows_future[j] <= sl
+            hit_2r = highs_future[j] >= tp_2r
+            hit_1r_now = highs_future[j] >= tp_1r
+        else:
+            stopped = highs_future[j] >= sl
+            hit_2r = lows_future[j] <= tp_2r
+            hit_1r_now = lows_future[j] <= tp_1r
+
+        # Same-bar conflict: assume stop hit first (conservative)
+        if stopped and hit_2r:
+            return ('stopped', j)
+        if stopped and hit_1r_now and not hit_1r:
+            return ('stopped', j)
+
+        if hit_2r:
+            return ('2R', j)
+
+        if stopped:
+            return ('stopped', j)
+
+        if hit_1r_now and not hit_1r:
+            hit_1r = True
+            hit_1r_bar = j
+
+    if hit_1r:
+        return ('1R', hit_1r_bar)
+    return ('none', -1)
+
+
+def _label_rr_outcome(close_t: float, highs_future: np.ndarray, lows_future: np.ndarray,
+                      last_swing_low: float, last_swing_high: float, atr_14: float) -> int:
+    """Compute Group D label for a single bar."""
+    if np.isnan(last_swing_low) or np.isnan(last_swing_high) or atr_14 <= 0:
+        return -1
+
+    # Long side setup
+    sl_long = last_swing_low - 0.25
+    risk_long = close_t - sl_long
+    if risk_long < 0.3 * atr_14 or risk_long > 2.0 * atr_14:
+        risk_long = 1.0 * atr_14
+        sl_long = close_t - risk_long
+    tp_1r_long = close_t + risk_long
+    tp_2r_long = close_t + 2.0 * risk_long
+
+    # Short side setup
+    sl_short = last_swing_high + 0.25
+    risk_short = sl_short - close_t
+    if risk_short < 0.3 * atr_14 or risk_short > 2.0 * atr_14:
+        risk_short = 1.0 * atr_14
+        sl_short = close_t + risk_short
+    tp_1r_short = close_t - risk_short
+    tp_2r_short = close_t - 2.0 * risk_short
+
+    # Scan both sides
+    long_out, long_bar = _scan_side(highs_future, lows_future,
+                                    sl_long, tp_1r_long, tp_2r_long, is_long=True)
+    short_out, short_bar = _scan_side(highs_future, lows_future,
+                                      sl_short, tp_1r_short, tp_2r_short, is_long=False)
+
+    # Resolve conflicts
+    rank = {'2R': 3, '1R': 2, 'none': 1, 'stopped': 0}
+
+    if rank[long_out] > rank[short_out]:
+        winner_side, winner_out = 'long', long_out
+    elif rank[short_out] > rank[long_out]:
+        winner_side, winner_out = 'short', short_out
+    elif long_out == short_out:
+        if long_out == 'none':
+            return 6  # no_trigger
+        if long_out == 'stopped':
+            return 6  # both stopped
+        winner_side = 'long' if long_bar <= short_bar else 'short'
+        winner_out = long_out
+    else:
+        winner_side, winner_out = 'long', long_out
+
+    label_map = {
+        ('long', '2R'): 0,
+        ('long', '1R'): 1,
+        ('long', 'stopped'): 2,
+        ('short', '2R'): 3,
+        ('short', '1R'): 4,
+        ('short', 'stopped'): 5,
+        ('long', 'none'): 6,
+        ('short', 'none'): 6,
+    }
+    return label_map[(winner_side, winner_out)]
+
+
+def _compute_labels_d_chunk(args: tuple) -> tuple:
+    """Process a chunk for Group D labels."""
+    start, end, close, high, low, atr_14, last_swing_high, last_swing_low = args
+    n_total = len(close)
+    chunk_len = end - start
+    labels = np.full(chunk_len, -1, dtype=np.int64)
+
+    for local_i in range(chunk_len):
+        i = start + local_i
+        if i >= n_total - H:
+            continue
+        highs_future = high[i + 1:i + 1 + H]
+        lows_future = low[i + 1:i + 1 + H]
+
+        labels[local_i] = _label_rr_outcome(
+            close[i], highs_future, lows_future,
+            last_swing_low[i], last_swing_high[i], atr_14[i]
+        )
+
+    return start, end, labels
+
+
+# ============================================================
 # Parallel Label Computation
 # ============================================================
 
@@ -401,8 +534,29 @@ def compute_all_labels(bars: pd.DataFrame, n_workers: int = 0,
     bars['label_b'] = label_b
     bars['label_c'] = label_c
 
+    # --- Group D ---
+    print("  Computing Group D labels (R-multiple outcome)...")
+    chunks_d = []
+    for i in range(0, n, chunk_size):
+        end = min(i + chunk_size, n)
+        chunks_d.append((i, end, close, high, low, atr_14,
+                         last_swing_high, last_swing_low))
+
+    if n_workers > 1:
+        with ProcessPoolExecutor(max_workers=n_workers) as pool:
+            results_d = list(pool.map(_compute_labels_d_chunk, chunks_d))
+    else:
+        results_d = [_compute_labels_d_chunk(c) for c in chunks_d]
+
+    label_d = np.full(n, -1, dtype=np.int64)
+    for start, end, chunk_labels in results_d:
+        label_d[start:end] = chunk_labels
+
+    bars['label_d'] = label_d
+
     # Print distribution
-    for name, lbl, n_cls in [('A (MFE)', label_a, 3), ('B (Vol)', label_b, 3), ('C (Dir)', label_c, 4)]:
+    for name, lbl, n_cls in [('A (MFE)', label_a, 3), ('B (Vol)', label_b, 3),
+                              ('C (Dir)', label_c, 4), ('D (R-mult)', label_d, 7)]:
         valid = lbl[lbl >= 0]
         print(f"    Group {name}: {len(valid)} valid samples")
         for c in range(n_cls):
@@ -448,6 +602,7 @@ def get_valid_mask(bars: pd.DataFrame) -> np.ndarray:
     mask[bars['label_a'].values < 0] = False
     mask[bars['label_b'].values < 0] = False
     mask[bars['label_c'].values < 0] = False
+    mask[bars['label_d'].values < 0] = False
 
     # RTH only: decision bar must be within Regular Trading Hours (9:30-16:00 ET)
     rth_mask = _is_rth(bars.index)

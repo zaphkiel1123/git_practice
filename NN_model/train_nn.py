@@ -433,7 +433,7 @@ def train_head(head: str, bars: pd.DataFrame, valid_mask: np.ndarray,
 def main():
     parser = argparse.ArgumentParser(description='Train ES Mini NN model (Phase 1)')
     parser.add_argument('data_dir', help='Directory containing .data files')
-    parser.add_argument('--head', default='all', choices=['A', 'B', 'C', 'all'],
+    parser.add_argument('--head', default='all', choices=['A', 'B', 'C', 'D', 'all'],
                         help='Which label head to train (default: all)')
     parser.add_argument('--device', default=None, help='Device: xpu, cuda, cpu (default: auto)')
     parser.add_argument('--workers', type=int, default=0,
@@ -505,7 +505,7 @@ def main():
 
     # ---- Training ----
     t_training = time.time()
-    heads_to_train = ['A', 'B', 'C'] if args.head == 'all' else [args.head.upper()]
+    heads_to_train = ['A', 'B', 'C', 'D'] if args.head == 'all' else [args.head.upper()]
     all_results = {}
 
     for head in heads_to_train:

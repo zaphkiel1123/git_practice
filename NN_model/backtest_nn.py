@@ -117,6 +117,7 @@ HEAD_CLASS_NAMES = {
     'A': ['strong_long_opp', 'strong_short_opp', 'no_edge'],
     'B': ['expansion', 'normal', 'contraction'],
     'C': ['continuation', 'retracement', 'reversal', 'chop'],
+    'D': ['long_2R_win', 'long_1R_win', 'long_stopped', 'short_2R_win', 'short_1R_win', 'short_stopped', 'no_trigger'],
 }
 
 
@@ -188,7 +189,7 @@ def main():
     parser.add_argument('data_dir', help='Directory containing .data files for backtesting')
     parser.add_argument('--model-dir', default=None,
                         help='Directory with saved model .pt files (default: ./models)')
-    parser.add_argument('--head', default='all', choices=['A', 'B', 'C', 'all'],
+    parser.add_argument('--head', default='all', choices=['A', 'B', 'C', 'D', 'all'],
                         help='Which head to backtest (default: all)')
     parser.add_argument('--device', default=None, help='Device: xpu, cuda, cpu (default: auto)')
     parser.add_argument('--workers', type=int, default=0, help='Pipeline workers (0=auto)')
@@ -210,7 +211,7 @@ def main():
     device = resolve_device(args.device)
     print(f"Device: {device}")
 
-    heads_to_test = ['A', 'B', 'C'] if args.head == 'all' else [args.head.upper()]
+    heads_to_test = ['A', 'B', 'C', 'D'] if args.head == 'all' else [args.head.upper()]
 
     # Check which models exist
     available_models = {}
