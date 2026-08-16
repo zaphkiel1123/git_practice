@@ -358,14 +358,15 @@ def compute_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray,
 # ============================================================
 
 def compute_cvd(volume_delta: np.ndarray, timestamps: pd.DatetimeIndex) -> np.ndarray:
-    """Compute Cumulative Volume Delta with session reset at RTH open (9:30 ET)."""
+    """Compute Cumulative Volume Delta with session reset at RTH open (9:30 ET).
+    Timestamps are already in New York (Eastern) time."""
     n = len(volume_delta)
     cvd = np.zeros(n, dtype=np.float64)
 
-    try:
-        ts_et = timestamps.tz_localize('America/Chicago').tz_convert('America/New_York')
-    except TypeError:
+    if timestamps.tz is not None:
         ts_et = timestamps.tz_convert('America/New_York')
+    else:
+        ts_et = timestamps
 
     hours = ts_et.hour
     minutes = ts_et.minute
@@ -564,11 +565,12 @@ def compute_structure_features(high: np.ndarray, low: np.ndarray,
 # ============================================================
 
 def compute_mins_from_rth_open(timestamps: pd.DatetimeIndex) -> np.ndarray:
-    """Compute minutes since RTH open (9:30 ET) for each bar."""
-    try:
-        ts_et = timestamps.tz_localize('America/Chicago').tz_convert('America/New_York')
-    except TypeError:
+    """Compute minutes since RTH open (9:30 ET) for each bar.
+    Timestamps are already in New York (Eastern) time."""
+    if timestamps.tz is not None:
         ts_et = timestamps.tz_convert('America/New_York')
+    else:
+        ts_et = timestamps
 
     hours = ts_et.hour
     minutes_arr = ts_et.minute

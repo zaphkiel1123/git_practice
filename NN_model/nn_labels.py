@@ -426,6 +426,7 @@ def get_valid_mask(bars: pd.DataFrame) -> np.ndarray:
       - Bars with ATR_14 <= 0
       - Bars with leg_size <= 0 or NaN
       - Bars with invalid labels (-1)
+      - Non-RTH bars (only train/predict during 9:30-16:00 ET)
     """
     n = len(bars)
     mask = np.ones(n, dtype=bool)
@@ -448,4 +449,19 @@ def get_valid_mask(bars: pd.DataFrame) -> np.ndarray:
     mask[bars['label_b'].values < 0] = False
     mask[bars['label_c'].values < 0] = False
 
+    # RTH only: decision bar must be within Regular Trading Hours (9:30-16:00 ET)
+    rth_mask = _is_rth(bars.index)
+    mask[~rth_mask] = False
+
     return mask
+
+
+def _is_rth(timestamps: pd.DatetimeIndex) -> np.ndarray:
+    """Return boolean mask for Regular Trading Hours (9:30-16:00 ET).
+    Timestamps are already in New York (Eastern) time."""
+    if timestamps.tz is not None:
+        ts_et = timestamps.tz_convert('America/New_York')
+    else:
+        ts_et = timestamps
+    hm = ts_et.hour * 100 + ts_et.minute
+    return ((hm >= 930) & (hm < 1600)).values

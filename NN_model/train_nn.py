@@ -52,20 +52,19 @@ def resolve_device(requested: str | None = None) -> torch.device:
         _print_device_info(device)
         return device
 
-    try:
-        import intel_extension_for_pytorch  # noqa: F401
-        if torch.xpu.is_available():
-            device = torch.device('xpu')
-            _print_device_info(device)
-            return device
-    except (ImportError, AttributeError):
-        pass
+    # Try Intel XPU (works with PyTorch +xpu builds, no IPEX required)
+    if hasattr(torch, 'xpu') and torch.xpu.is_available():
+        device = torch.device('xpu')
+        _print_device_info(device)
+        return device
 
+    # Try CUDA
     if torch.cuda.is_available():
         device = torch.device('cuda')
         _print_device_info(device)
         return device
 
+    # Fallback to CPU
     device = torch.device('cpu')
     _print_device_info(device)
     return device
@@ -77,14 +76,28 @@ def _print_device_info(device: torch.device):
     print(f"  DEVICE INFO")
     print(f"  {'='*50}")
     if device.type == 'xpu':
-        name = torch.xpu.get_device_name(0)
-        mem = torch.xpu.get_device_properties(0).total_memory
-        print(f"  Using: Intel XPU (GPU)")
-        print(f"  Device: {name}")
-        print(f"  Memory: {mem / 1024**3:.1f} GB")
+        try:
+            name = torch.xpu.get_device_name(0)
+        except Exception:
+            name = "Intel XPU (name unavailable)"
+        try:
+            props = torch.xpu.get_device_properties(0)
+            mem = getattr(props, 'total_memory', None)
+            if mem:
+                print(f"  Using: Intel XPU (GPU)")
+                print(f"  Device: {name}")
+                print(f"  Memory: {mem / 1024**3:.1f} GB")
+            else:
+                print(f"  Using: Intel XPU (GPU)")
+                print(f"  Device: {name}")
+        except Exception:
+            print(f"  Using: Intel XPU (GPU)")
+            print(f"  Device: {name}")
+        print(f"  XPU device count: {torch.xpu.device_count()}")
     elif device.type == 'cuda':
         name = torch.cuda.get_device_name(0)
-        mem = torch.cuda.get_device_properties(0).total_mem
+        props = torch.cuda.get_device_properties(0)
+        mem = props.total_mem
         print(f"  Using: NVIDIA CUDA (GPU)")
         print(f"  Device: {name}")
         print(f"  Memory: {mem / 1024**3:.1f} GB")
@@ -94,8 +107,7 @@ def _print_device_info(device: torch.device):
         n_cores = multiprocessing.cpu_count()
         print(f"  Using: CPU")
         print(f"  Cores available: {n_cores}")
-        print(f"  No GPU detected (install intel-extension-for-pytorch for XPU,"
-              f" or CUDA toolkit for NVIDIA)")
+        print(f"  No GPU detected")
     print(f"  PyTorch version: {torch.__version__}")
     print(f"  {'='*50}\n")
 
@@ -153,15 +165,17 @@ def compute_class_weights(labels: np.ndarray, n_classes: int) -> torch.Tensor:
 
 def _optimize_for_xpu(model: nn.Module, optimizer: torch.optim.Optimizer,
                       device: torch.device) -> tuple[nn.Module, torch.optim.Optimizer]:
-    """Apply Intel Extension for PyTorch optimization for XPU devices."""
+    """Apply Intel Extension for PyTorch optimization if available (optional)."""
     if device.type != 'xpu':
         return model, optimizer
     try:
         import intel_extension_for_pytorch as ipex
         model, optimizer = ipex.optimize(model, optimizer=optimizer)
-        print("  Applied ipex.optimize() for Intel XPU acceleration")
-    except (ImportError, Exception) as e:
-        print(f"  Warning: ipex.optimize() failed ({e}), running without XPU optimization")
+        print("  Applied ipex.optimize() for XPU acceleration")
+    except ImportError:
+        pass  # IPEX not required with PyTorch +xpu builds
+    except Exception as e:
+        print(f"  Note: ipex.optimize() skipped ({e})")
     return model, optimizer
 
 
@@ -346,7 +360,8 @@ def train_head(head: str, bars: pd.DataFrame, valid_mask: np.ndarray,
                 current_lr = optimizer.param_groups[0]['lr']
 
                 print(f"    Epoch {epoch+1:3d}: train_loss={train_loss:.4f}, "
-                      f"val_loss={val_loss:.4f}, macro_f1={val_f1:.4f}, lr={current_lr:.2e}")
+                      f"val_loss={val_loss:.4f}, macro_f1={val_f1:.4f}, "
+                      f"lr={current_lr:.2e}, elapsed={time.time()-t0:.1f}s")
 
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
@@ -489,6 +504,7 @@ def main():
     print(f"\n  Pipeline complete [{time.time()-t_pipeline:.1f}s]")
 
     # ---- Training ----
+    t_training = time.time()
     heads_to_train = ['A', 'B', 'C'] if args.head == 'all' else [args.head.upper()]
     all_results = {}
 
@@ -508,6 +524,9 @@ def main():
             }, model_path)
             print(f"  Saved best model → {model_path}")
 
+    training_elapsed = time.time() - t_training
+    total_elapsed = time.time() - t_pipeline
+
     # ---- Summary ----
     print(f"\n{'='*70}")
     print(f"  FINAL SUMMARY")
@@ -515,6 +534,10 @@ def main():
     for head, result in all_results.items():
         print(f"  Head {head}: avg_macro_f1={result['avg_macro_f1']:.4f}, "
               f"best={result['best_macro_f1']:.4f}")
+    print(f"\n  Elapsed time:")
+    print(f"    Data pipeline:  {time.time()-t_pipeline - training_elapsed:.1f}s")
+    print(f"    Training:       {training_elapsed:.1f}s")
+    print(f"    Total:          {total_elapsed:.1f}s")
 
     # Save metadata
     meta = {
