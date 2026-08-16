@@ -464,4 +464,7 @@ def _is_rth(timestamps: pd.DatetimeIndex) -> np.ndarray:
     else:
         ts_et = timestamps
     hm = ts_et.hour * 100 + ts_et.minute
-    return ((hm >= 930) & (hm < 1600)).values
+    result = (hm >= 930) & (hm < 1600)
+    if hasattr(result, 'values'):
+        return result.values
+    return np.asarray(result)
