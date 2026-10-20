@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ES Tick Candle Viewer</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #131722; color: #d1d4dc;
+               font: 13px/1.3 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  #toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+             padding: 6px 10px; background: #1e222d; border-bottom: 1px solid #2a2e39; }
+  .grp { display: flex; align-items: center; gap: 5px; }
+  .grp + .grp { padding-left: 14px; border-left: 1px solid #2a2e39; }
+  label { color: #8b8f9a; }
+  input, select, button { background: #2a2e39; color: #d1d4dc; border: 1px solid #3a3f4d;
+                          border-radius: 4px; padding: 3px 8px; font: inherit; }
+  input[type=number] { width: 70px; }
+  input[type=text] { width: 76px; }
+  button { cursor: pointer; min-width: 30px; }
+  button:hover { background: #363b4a; }
+  button.on { background: #2962ff; border-color: #2962ff; color: #fff; }
+  button#play { min-width: 74px; }
+  #fileinfo { color: #8b8f9a; margin-left: auto; white-space: nowrap; }
+  #scrubrow { display: flex; align-items: center; gap: 10px; padding: 4px 10px;
+              background: #1e222d; border-bottom: 1px solid #2a2e39; }
+  #scrub { flex: 1; accent-color: #2962ff; }
+  #scrubtime { min-width: 190px; text-align: right; font-variant-numeric: tabular-nums; }
+  #chartwrap { flex: 1; display: flex; min-height: 0; }
+  #chartbox { flex: 1; position: relative; min-width: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+  #tape { width: 210px; border-left: 1px solid #2a2e39; background: #171b26; display: flex; flex-direction: column;
+          font: 11px/15px ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace; }
+  #tape.hide { display: none; }
+  #tapehead { padding: 4px 8px; color: #8b8f9a; border-bottom: 1px solid #2a2e39; font-family: inherit; }
+  #tapebody { flex: 1; overflow: hidden; }
+  #tapebody .r { display: grid; grid-template-columns: 1fr auto 34px; gap: 6px; padding: 0 8px; white-space: nowrap; }
+  #tapebody .r span:nth-child(2), #tapebody .r span:nth-child(3) { text-align: right; }
+  #tapebody .r.b { color: #43d65f; } #tapebody .r.s { color: #b47cf5; }
+  #tapebody .r:first-child { background: rgba(255,255,255,.08); }
+  #tapebody .big { font-weight: 700; }
+  #status { padding: 4px 10px; background: #1e222d; border-top: 1px solid #2a2e39;
+            font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
+            text-overflow: ellipsis; }
+  #status b { color: #fff; font-weight: 600; }
+  #msg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+         justify-content: center; gap: 10px; pointer-events: none; color: #8b8f9a; font-size: 15px; }
+  #msg.hide { display: none; }
+  #help { color: #5d6270; font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <div class="grp">
+    <label for="unit">Bar</label>
+    <select id="unit" title="How a candle is formed">
+      <option value="ticks">ticks (prints)</option>
+      <option value="contracts">contracts (sum of size)</option>
+      <option value="time">time</option>
+    </select>
+    <input id="barsize" type="number" min="1" max="100000" value="200" step="1">
+    <select id="ivl" title="Candle interval" style="display:none">
+      <option value="1">1s</option>
+      <option value="5">5s</option>
+      <option value="15">15s</option>
+      <option value="60">1min</option>
+    </select>
+    <button id="fp" class="on" title="Footprint + volume profile inside each candle (F)">Footprint</button>
+  </div>
+  <div class="grp">
+    <button id="tostart" title="Jump to start of file (Home)">|&lt;</button>
+    <button id="stepback" title="Back one tick (Left arrow)">&lt; tick</button>
+    <button id="play" title="Play / pause (Space)">Play</button>
+    <button id="steptick" title="Forward one tick (Right arrow)">tick &gt;</button>
+    <button id="stepbar" title="Forward one bar (Shift+Right arrow)">bar &gt;&gt;</button>
+  </div>
+  <div class="grp">
+    <select id="mode" title="How playback speed is expressed">
+      <option value="rt">Real-time x</option>
+      <option value="rate">Ticks / sec</option>
+    </select>
+    <select id="speed"></select>
+    <label><input id="skipgaps" type="checkbox"> skip quiet gaps</label>
+  </div>
+  <div class="grp">
+    <label for="gotime">Go to ET</label>
+    <input id="gotime" type="text" value="09:30:00" spellcheck="false">
+    <button id="go">Go</button>
+    <button id="follow" class="on" title="Keep newest bar in view (End)">Follow</button>
+    <button id="tapebtn" class="on" title="Time & Sales tape (T)">Tape</button>
+  </div>
+  <div class="grp">
+    <button id="open">Open .data...</button>
+    <input id="file" type="file" style="display:none">
+  </div>
+  <div id="fileinfo"></div>
+</div>
+<div id="scrubrow">
+  <input id="scrub" type="range" min="0" max="0" value="0" step="1">
+  <div id="scrubtime">-</div>
+</div>
+<div id="chartwrap">
+  <div id="chartbox">
+    <canvas id="cv"></canvas>
+    <div id="msg"><div id="msgmain">Loading...</div>
+      <div id="help">Drop a <code>.data</code> file here or use "Open .data". All times shown are New York (ET).</div></div>
+  </div>
+  <div id="tape"><div id="tapehead">Time &amp; Sales (ET)</div><div id="tapebody"></div></div>
+</div>
+<div id="status">&nbsp;</div>
+
+<script>
+// ===================================================================
+// CORE (no DOM): decoding, bar construction, footprint.  Unit-tested in node.
+// ===================================================================
+// ==== CORE BEGIN ====
+const REC_SIZE = 57;
+const TICK_SIZE = 0.25;                        // ES minimum price increment
+const IMBALANCE_RATIO = 3;                     // same 3x ratio as es_training/feature_pipeline.py
+const DOMINANCE = 0.25;                        // one side must exceed the other by more than 25% to 'win' a price level
+// Record layout (little-endian, packed):
+//   0  int64   .NET DateTime ticks (100 ns since 0001-01-01), New York wall clock
+//   8  float64 trade price
+//  16  float64 level low (bid)   24 float64 level high (ask)
+//  32  uint32  size (contracts in this print)   36 uint32 size dup   40 uint32 cumulative
+//  44  3 x uint32 reserved                       56 uint8 flag
+const NET_EPOCH_TO_UNIX_MS = 62135596800000;   // ms between 0001-01-01 and 1970-01-01
+
+// The timestamps are ET wall-clock times.  We carry them as "ms since epoch as if
+// the wall clock were UTC" and always format with the UTC getters, so the browser's
+// own time zone (and DST rules) can never shift what is displayed.
+//
+// Aggressor side: the level is the bid/ask quote.  A print at the ask is a buyer lifting
+// (side +1), at the bid a seller hitting (side -1).  On the 20250213 file 99.99% of prints sit
+// exactly on one bound, and 99.3% of up/down price moves agree with this rule.  The few
+// prints on neither bound fall back to which half of the quote they are in.
+function parseTicks(buf) {
+  const n = Math.floor(buf.byteLength / REC_SIZE);
+  const dv = new DataView(buf);
+  const t = new Float64Array(n), p = new Float64Array(n), q = new Uint32Array(n), side = new Int8Array(n);
+  for (let i = 0, o = 0; i < n; i++, o += REC_SIZE) {
+    const lo = dv.getUint32(o, true), hi = dv.getInt32(o + 4, true);
+    // hi*2^32+lo is exact only to ~6 us at this magnitude; round to ms, the data's resolution.
+    t[i] = Math.round((hi * 4294967296 + lo) / 10000) - NET_EPOCH_TO_UNIX_MS;
+    const pr = dv.getFloat64(o + 8, true), bid = dv.getFloat64(o + 16, true), ask = dv.getFloat64(o + 24, true);
+    p[i] = pr;
+    q[i] = dv.getUint32(o + 32, true);
+    side[i] = pr === ask ? 1 : pr === bid ? -1 : (pr >= (bid + ask) / 2 ? 1 : -1);
+  }
+  let sorted = true;
+  for (let i = 1; i < n; i++) if (t[i] < t[i - 1]) { sorted = false; break; }
+  return { n, t, p, q, side, trailing: buf.byteLength - n * REC_SIZE, sorted };
+}
+
+// Builds bars incrementally, one print at a time.
+//   unit 'ticks'     N prints per bar.
+//   unit 'contracts' N contracts per bar; a print that straddles a boundary is split.
+//   unit 'time'      N is the interval in ms; bars are aligned to the wall clock
+//                    (e.g. 5 s bars start at :00, :05, :10 ...) and empty intervals produce no bar.
+// The newest bar is "forming" and is already visible after its first print; every print updates it.
+class BarBuilder {
+  constructor(data, N, unit) {
+    this.d = data; this.N = Math.max(1, Math.floor(N));
+    this.mode = unit === 'time' ? 'time' : unit === 'contracts' ? 'contracts' : 'ticks';
+    this.contracts = this.mode === 'contracts'; this.timeMode = this.mode === 'time';
+    let cap;
+    if (this.timeMode) {
+      const span = data.n ? data.t[data.n - 1] - data.t[0] : 0;
+      cap = Math.min(data.n, Math.floor(span / this.N) + 2) + 3;
+    } else {
+      let total = data.n;
+      if (this.contracts) { total = 0; for (let i = 0; i < data.n; i++) total += data.q[i]; }
+      cap = Math.floor(total / this.N) + 3;
+    }
+    const F = () => new Float64Array(cap), I = () => new Int32Array(cap);
+    this.o = F(); this.h = F(); this.l = F(); this.c = F();
+    this.v = F();                         // contracts in the bar
+    this.bv = F(); this.av = F();         // contracts sold at the bid / bought at the ask
+    this.nt = I();                        // prints in the bar
+    this.t0 = F(); this.t1 = F();         // bar start (interval start for time bars) / last print
+    this.i0 = I(); this.i1 = I();         // first / last record index in the bar
+    this.fv = F(); this.lv = F();         // contracts of the first / last record that belong to this bar
+    this.cache = new Map();
+    this.reset();
+  }
+  reset() { this.nb = 0; this.fill = 0; this.pos = 0; this.curKey = NaN; this.cache.clear(); }
+  count() { return this.nb + (this.fill > 0 ? 1 : 0); }   // closed bars + the forming bar
+  label() {
+    if (this.timeMode) return this.N >= 60000 ? `${this.N / 60000}min` : `${this.N / 1000}s`;
+    return `${this.N.toLocaleString()} ${this.contracts ? 'contracts' : 'ticks'}`;
+  }
+  _piece(k, isNew, price, i, t0, tm, pv, ask) {
+    if (isNew) {
+      this.o[k] = this.h[k] = this.l[k] = this.c[k] = price;
+      this.v[k] = 0; this.bv[k] = 0; this.av[k] = 0; this.nt[k] = 0;
+      this.t0[k] = t0; this.i0[k] = i; this.fv[k] = pv;
+    } else {
+      if (price > this.h[k]) this.h[k] = price;
+      if (price < this.l[k]) this.l[k] = price;
+      this.c[k] = price;
+    }
+    this.v[k] += pv; if (ask) this.av[k] += pv; else this.bv[k] += pv;
+    this.nt[k]++; this.t1[k] = tm; this.i1[k] = i; this.lv[k] = pv;
+  }
+  add(i) {
+    const d = this.d, price = d.p[i], size = d.q[i], tm = d.t[i], ask = d.side[i] > 0, N = this.N;
+    if (this.timeMode) {
+      const key = Math.floor(tm / N);
+      if (this.fill > 0 && key !== this.curKey) { this.nb++; this.fill = 0; }
+      const isNew = this.fill === 0;
+      if (isNew) this.curKey = key;
+      this._piece(this.nb, isNew, price, i, key * N, tm, size, ask);
+      this.fill = 1;
+      return;
+    }
+    let rem = this.contracts ? size : 1;
+    while (rem > 0) {
+      const take = Math.min(rem, N - this.fill);
+      this._piece(this.nb, this.fill === 0, price, i, tm, tm, this.contracts ? take : size, ask);
+      this.fill += take; rem -= take;
+      if (this.fill >= N) { this.nb++; this.fill = 0; }
+    }
+  }
+  advanceTo(target) { while (this.pos < target) this.add(this.pos++); }
+  rebuildTo(target) { this.reset(); this.advanceTo(target); }
+
+  // Contracts of record r that belong to bar k (a record can be split across bars in 'contracts' mode).
+  _recVol(k, r) {
+    if (r === this.i0[k]) return r === this.i1[k] ? this.v[k] : this.fv[k];
+    return r === this.i1[k] ? this.lv[k] : this.d.q[r];
+  }
+  // Footprint of bar k: bid/ask contracts at every price level between its low and high, plus the
+  // volume profile (point of control, 70% value area).  Records of a bar are contiguous, so this is
+  // computed on demand from the raw data; closed bars are cached, the forming bar is recomputed.
+  footprint(k) {
+    const cached = this.cache.get(k);
+    if (cached && k < this.nb) return cached;
+    const d = this.d, ts = TICK_SIZE;
+    const lo = Math.round(this.l[k] / ts), m = Math.round(this.h[k] / ts) - lo + 1;
+    const bid = new Float64Array(m), ask = new Float64Array(m), tot = new Float64Array(m);
+    for (let r = this.i0[k], e = this.i1[k]; r <= e; r++) {
+      const j = Math.round(d.p[r] / ts) - lo;
+      if (j < 0 || j >= m) continue;
+      const vol = this._recVol(k, r);
+      if (d.side[r] > 0) ask[j] += vol; else bid[j] += vol;
+    }
+    let max = 0, poc = 0, T = 0, maxSide = 0;       // maxSide scales the left (sell) / right (buy) bars
+    for (let j = 0; j < m; j++) {
+      tot[j] = bid[j] + ask[j]; T += tot[j];
+      if (tot[j] > max) { max = tot[j]; poc = j; }
+      if (bid[j] > maxSide) maxSide = bid[j];
+      if (ask[j] > maxSide) maxSide = ask[j];
+    }
+    let vl = poc, vh = poc, acc = tot[poc];
+    while (acc < 0.7 * T && (vl > 0 || vh < m - 1)) {
+      const up = vh < m - 1 ? tot[vh + 1] : -1, dn = vl > 0 ? tot[vl - 1] : -1;
+      if (up >= dn) acc += tot[++vh]; else acc += tot[--vl];
+    }
+    // Per-level flags.
+    //  buyImb / sellImb: diagonal footprint imbalance, same rule as es_training/feature_pipeline.py
+    //    (_count_buy_imb / _count_sell_imb):  buy at P  >= 3 x sell at P-tick   (that sell must be > 0)
+    //                                         sell at P >= 3 x buy  at P+tick   (that buy must be > 0)
+    //  dom: who dominates the level.  +1 buyers (buy > 1.25 x sell), -1 sellers (sell > 1.25 x buy),
+    //       0 neither (within 25% of each other).  Drives the colour of the volume-profile bars.
+    const buyImb = new Uint8Array(m), sellImb = new Uint8Array(m), dom = new Int8Array(m);
+    for (let j = 0; j < m; j++) {
+      if (j > 0 && bid[j - 1] > 0 && ask[j] >= IMBALANCE_RATIO * bid[j - 1]) buyImb[j] = 1;
+      if (j < m - 1 && ask[j + 1] > 0 && bid[j] >= IMBALANCE_RATIO * ask[j + 1]) sellImb[j] = 1;
+      if (ask[j] > (1 + DOMINANCE) * bid[j]) dom[j] = 1;
+      else if (bid[j] > (1 + DOMINANCE) * ask[j]) dom[j] = -1;
+    }
+    const fp = { lo, m, bid, ask, tot, max, maxSide, poc, vl, vh, total: T, buyImb, sellImb, dom };
+    if (k < this.nb) { if (this.cache.size > 4000) this.cache.clear(); this.cache.set(k, fp); }
+    return fp;
+  }
+}
+
+function lowerBound(arr, x, n) {          // first index with arr[i] >= x
+  let lo = 0, hi = n;
+  while (lo < hi) { const m = (lo + hi) >>> 1; if (arr[m] < x) lo = m + 1; else hi = m; }
+  return lo;
+}
+
+// "09:30", "0930", "9:30:15" -> ms since midnight, or null
+function parseTod(s) {
+  const m = /^\s*(\d{1,2}):?(\d{2})(?::?(\d{2}))?\s*$/.exec(s);
+  if (!m) return null;
+  const h = +m[1], mi = +m[2], se = m[3] ? +m[3] : 0;
+  if (h > 23 || mi > 59 || se > 59) return null;
+  return ((h * 60 + mi) * 60 + se) * 1000;
+}
+
+// Time-of-day -> first record index at/after it, within this file's session.
+// A Globex session starts 18:00 ET the prior evening, so "09:30" means the day *after* the first record.
+function seekIndexForTod(data, todMs) {
+  if (!data.n) return 0;
+  const DAY = 86400000, t0 = data.t[0];
+  let target = Math.floor(t0 / DAY) * DAY + todMs;
+  if (target < t0) target += DAY;
+  if (target > data.t[data.n - 1]) return -1;
+  return lowerBound(data.t, target, data.n);
+}
+
+const pad = (x, n = 2) => String(x).padStart(n, '0');
+function fmtDate(ms) { const d = new Date(ms); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; }
+function fmtHMS(ms) { const d = new Date(ms); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`; }
+function fmtFull(ms) { return `${fmtDate(ms)} ${fmtHMS(ms)}.${pad(((ms % 1000) + 1000) % 1000, 3)}`; }
+// Round time-axis steps (ms) for time bars; every one is a multiple of the 1/5/15/60 s intervals it is used with.
+const TIME_LABEL_STEPS = [1, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600].map(s => s * 1000);
+function timeLabelStep(intervalMs, barPx, minPx) {
+  const need = minPx / barPx * intervalMs;
+  for (const s of TIME_LABEL_STEPS) if (s >= intervalMs && s % intervalMs === 0 && s >= need) return s;
+  return 3600000;
+}
+function niceStep(raw) {
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * mag >= raw) return m * mag;
+  return 10 * mag;
+}
+// ==== CORE END ====
+
+if (typeof document !== 'undefined') (function ui() {
+// ===================================================================
+// UI
+// ===================================================================
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+const C = { bg: '#131722', grid: '#232733', text: '#9aa0ad', axis: '#2a2e39', up: '#26a69a', down: '#ef5350',
+            flat: '#8b8f9a', cross: '#6b7080', poc: '#f5c542',
+            buy: '#43d65f', sell: '#b47cf5',                  // aggressive buyer (at ask) / seller (at bid)
+            buyBar: 'rgba(67,214,95,.45)', sellBar: 'rgba(150,90,230,.55)',
+            greyBar: 'rgba(150,155,170,.50)',                 // the non-dominant side of a level (or both sides if neither dominates)
+            buyImbText: '#3efe35', sellImbText: '#c04bff',   // imbalance font colours: green (buy) / purple (sell); style from es_training/view_data/candlestick_viewer.html
+            text2: '#ffffff' };
+const MONO = 'ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace';
+// Footprint numbers: light-weight, narrow sans so more candles fit on screen with the digits still readable.
+const NUMFONT = '"Roboto Condensed", "Arial Narrow", "Liberation Sans Narrow", "Helvetica Neue", Arial, sans-serif';
+function numFont(px) { ctx.font = `${px}px ${NUMFONT}`; if ('fontStretch' in ctx) ctx.fontStretch = 'semi-condensed'; }
+const SANS = '-apple-system, "Segoe UI", Roboto, sans-serif';
+const SPEEDS = {
+  rt:   [0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800, 3600],
+  rate: [1, 5, 10, 25, 50, 100, 250, 500, 1000, 5000, 20000],
+};
+const DEFAULT_SPEED = { rt: 10, rate: 100 };
+const MAX_PER_FRAME = 300000;
+const FP_VIS = 14, CANDLE_VIS = 120;
+
+const S = {
+  data: null, name: '', bb: null,
+  pos: 0, playing: false, simTime: 0, acc: 0, lastTs: null,
+  follow: true, vis: FP_VIS, viewEnd: 0, fp: true, tape: true,
+  mouse: null, drag: null, scrubbing: false,
+  volFrac: 0.18, splitDrag: false,           // volume pane height as a fraction of the chart area (drag the divider)
+  ySpan: null, yOff: 0, axisDrag: null,      // manual price-scale zoom (ySpan = visible points; null = auto-fit)
+};
+
+// ---------- speed select ----------
+function fillSpeeds() {
+  const mode = $('mode').value, sel = $('speed');
+  const prev = sel.value;
+  sel.innerHTML = '';
+  for (const v of SPEEDS[mode]) {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = mode === 'rt' ? `${v}x` : `${v.toLocaleString()} /s`;
+    sel.appendChild(o);
+  }
+  sel.value = SPEEDS[mode].includes(+prev) ? prev : DEFAULT_SPEED[mode];
+}
+
+// ---------- data / bars ----------
+function setData(buf, name) {
+  const data = parseTicks(buf);
+  if (!data.n) { showMsg('No records found in ' + name); return; }
+  const y = new Date(data.t[0]).getUTCFullYear();
+  let warn = '';
+  if (data.trailing) warn += ` | ${data.trailing} trailing bytes ignored`;
+  if (!data.sorted) warn += ' | WARNING: timestamps not sorted';
+  if (y < 2000 || y > 2100) warn += ` | WARNING: odd year ${y}, file layout may differ`;
+  S.data = data; S.name = name; lastTapeKey = '';
+  $('scrub').max = data.n;
+  $('fileinfo').textContent = `${name} | ${data.n.toLocaleString()} prints | ${fmtFull(data.t[0])} -> ${fmtFull(data.t[data.n - 1])} ET${warn}`;
+  document.title = `${name} - ES Tick Candles`;
+  hideMsg();
+  rebuildBars(0);
+  const q = new URLSearchParams(location.search);
+  const startTod = parseTod(q.get('t') || $('gotime').value);
+  let idx = startTod == null ? -1 : seekIndexForTod(data, startTod);
+  seek(idx < 0 ? 0 : idx);
+  if (+q.get('rec') > 0) requestAnimationFrame(() => requestAnimationFrame(() => startRecording(+q.get('rec'))));
+  else if (q.get('play') === '1') setPlaying(true);
+}
+
+function barSpec() {
+  const unit = $('unit').value;
+  const N = unit === 'time' ? (+$('ivl').value) * 1000 : Math.max(1, parseInt($('barsize').value, 10) || 1);
+  return [N, unit];
+}
+function rebuildBars(pos) {
+  if (!S.data) return;
+  const [N, unit] = barSpec();
+  S.bb = new BarBuilder(S.data, N, unit);
+  S.bb.advanceTo(pos);
+  S.pos = pos;
+}
+
+function seek(pos) {
+  if (!S.data) return;
+  pos = Math.max(0, Math.min(S.data.n, Math.floor(pos)));
+  if (S.bb && pos >= S.bb.pos) S.bb.advanceTo(pos); else if (S.bb) S.bb.rebuildTo(pos);
+  S.pos = pos; syncSim(); S.follow = true; updateFollowBtn(); render();
+}
+function syncSim() { const d = S.data; S.simTime = S.pos > 0 ? d.t[S.pos - 1] : d.t[0] - 1; S.acc = 0; }
+
+function stepTicks(k) {
+  if (!S.data) return;
+  if (k < 0) { seek(S.pos + k); return; }
+  S.bb.advanceTo(Math.min(S.data.n, S.pos + k)); S.pos = S.bb.pos; syncSim(); render();
+}
+function stepBar() {
+  if (!S.data) return;
+  const nb0 = S.bb.nb;
+  while (S.bb.pos < S.data.n && S.bb.nb === nb0) S.bb.add(S.bb.pos++);
+  S.pos = S.bb.pos; syncSim(); render();
+}
+
+// ---------- playback ----------
+// Every animation frame consumes all prints whose timestamp has been reached, and the chart is redrawn
+// from the live (forming) bar, so price, candle, footprint and tape move tick by tick rather than
+// jumping when a bar closes.  Use the 0.25x / 0.5x / 1x speeds to watch individual prints.
+function setPlaying(on) {
+  if (on && (!S.data || S.pos >= S.data.n)) on = false;
+  S.playing = on; S.lastTs = null;
+  $('play').textContent = on ? 'Pause' : 'Play';
+  $('play').classList.toggle('on', on);
+  if (on) { syncSim(); requestAnimationFrame(frame); }
+}
+function frame(ts) {
+  if (!S.playing) return;
+  const dt = S.lastTs == null ? 16 : Math.min(ts - S.lastTs, 100);
+  S.lastTs = ts;
+  const d = S.data, bb = S.bb, speed = +$('speed').value;
+  let target = S.pos;
+  if ($('mode').value === 'rt') {
+    S.simTime += dt * speed;
+    if ($('skipgaps').checked && S.pos < d.n && d.t[S.pos] - S.simTime > 1000) S.simTime = d.t[S.pos] - 1;
+    while (target < d.n && d.t[target] <= S.simTime && target - S.pos < MAX_PER_FRAME) target++;
+  } else {
+    S.acc += speed * dt / 1000;
+    const k = Math.floor(S.acc); S.acc -= k;
+    target = Math.min(d.n, S.pos + Math.min(k, MAX_PER_FRAME));
+  }
+  if (target > S.pos) { bb.advanceTo(target); S.pos = bb.pos; if ($('mode').value !== 'rt') S.simTime = d.t[S.pos - 1]; }
+  render();
+  if (S.pos >= d.n) { setPlaying(false); return; }
+  requestAnimationFrame(frame);
+}
+
+// ---------- UI text ----------
+function updateFollowBtn() { $('follow').classList.toggle('on', S.follow); }
+function updateStatus() {
+  const d = S.data; if (!d) return;
+  const el = $('status'), n = d.n;
+  if (S.pos === 0) { el.innerHTML = `Before first tick | next tick ${fmtFull(d.t[0])} ET | 0 / ${n.toLocaleString()}`; }
+  else {
+    const i = S.pos - 1;
+    el.innerHTML = `Last tick <b>${fmtFull(d.t[i])} ET</b> &nbsp;|&nbsp; price <b>${d.p[i].toFixed(2)}</b> &times; ${d.q[i]}` +
+      ` ${d.side[i] > 0 ? '(buy @ ask)' : '(sell @ bid)'}` +
+      ` &nbsp;|&nbsp; print ${S.pos.toLocaleString()} / ${n.toLocaleString()}` +
+      ` &nbsp;|&nbsp; ${S.bb.count().toLocaleString()} bars of ${S.bb.label()}`;
+  }
+  $('scrubtime').textContent = S.pos > 0 ? fmtFull(d.t[S.pos - 1]) + ' ET' : '-';
+  if (!S.scrubbing) $('scrub').value = S.pos;
+}
+let lastTapeKey = '';
+function updateTape() {
+  const d = S.data; if (!d || !S.tape) return;
+  const body = $('tapebody');
+  const rows = Math.max(1, Math.min(120, Math.floor(body.clientHeight / 15)));
+  const key = S.pos + ':' + rows;
+  if (key === lastTapeKey) return;
+  lastTapeKey = key;
+  let html = '';
+  for (let i = S.pos - 1, c = 0; i >= 0 && c < rows; i--, c++) {
+    html += `<div class="r ${d.side[i] > 0 ? 'b' : 's'}"><span>${fmtHMS(d.t[i])}.${pad(d.t[i] % 1000, 3)}</span>` +
+            `<span>${d.p[i].toFixed(2)}</span><span class="${d.q[i] >= 10 ? 'big' : ''}">${d.q[i]}</span></div>`;
+  }
+  body.innerHTML = html;
+}
+function showMsg(s) { $('msgmain').textContent = s; $('msg').classList.remove('hide'); }
+function hideMsg() { $('msg').classList.add('hide'); }
+
+// ---------- chart ----------
+let cssW = 0, cssH = 0;
+function resize() {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  cssW = r.width; cssH = r.height;
+  cv.width = Math.max(1, Math.round(cssW * dpr)); cv.height = Math.max(1, Math.round(cssH * dpr));
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  lastTapeKey = '';
+  render();
+}
+let raf = 0;
+function render() {
+  updateStatus(); updateTape();
+  if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); });
+}
+
+const L = {};   // layout, recomputed in draw
+function geom() {
+  L.axisW = 70; L.axisH = 22; L.padT = 42; L.padL = 6;
+  L.plotX = L.padL; L.plotW = Math.max(10, cssW - L.axisW - L.padL);
+  const avail = cssH - L.axisH - L.padT;
+  L.availH = avail;
+  L.volH = Math.max(36, Math.min(Math.floor(avail * 0.7), Math.floor(avail * S.volFrac)));
+  L.priceTop = L.padT; L.priceBottom = cssH - L.axisH - L.volH - 6;
+  L.volTop = cssH - L.axisH - L.volH; L.volBottom = cssH - L.axisH;
+}
+function barX(i) { return L.plotX + (i + 0.5 - L.first) * L.barW; }
+
+function draw() {
+  geom();
+  ctx.fillStyle = C.bg; ctx.fillRect(0, 0, cssW, cssH);
+  const bb = S.bb;
+  if (!bb) return;
+  const count = bb.count(), ts = TICK_SIZE;
+  L.barW = L.plotW / S.vis;
+  if (S.follow) S.viewEnd = count + Math.min(6, S.vis * 0.15);
+  S.viewEnd = Math.max(2, Math.min(S.viewEnd, count + S.vis - 2));
+  L.first = S.viewEnd - S.vis;
+
+  const lo = Math.max(0, Math.floor(L.first)), hi = Math.min(count - 1, Math.floor(S.viewEnd));
+  ctx.font = `11px ${SANS}`;
+  ctx.textBaseline = 'middle';
+
+  // axes frame
+  ctx.strokeStyle = C.axis; ctx.lineWidth = 1;
+  ctx.beginPath();
+  const ax = Math.round(L.plotX + L.plotW) + 0.5;
+  ctx.moveTo(ax, 0); ctx.lineTo(ax, cssH);
+  const by = Math.round(L.volBottom) + 0.5; ctx.moveTo(0, by); ctx.lineTo(cssW, by);
+  ctx.stroke();
+  // draggable divider between the price pane and the volume pane
+  const hotSplit = S.splitDrag || onSplitter(S.mouse), vy0 = Math.round(L.volTop - 3) + 0.5;
+  ctx.strokeStyle = hotSplit ? '#8a90a3' : C.axis; ctx.lineWidth = hotSplit ? 2 : 1;
+  ctx.beginPath(); ctx.moveTo(0, vy0); ctx.lineTo(L.plotX + L.plotW, vy0); ctx.stroke(); ctx.lineWidth = 1;
+  ctx.fillStyle = hotSplit ? '#8a90a3' : '#4a4f60';
+  ctx.fillRect(Math.round(L.plotX + L.plotW / 2 - 16), Math.round(vy0 - 1.5), 32, 3);
+
+  if (count === 0 || lo > hi) {
+    ctx.fillStyle = C.text; ctx.textAlign = 'center';
+    ctx.fillText('Press Play or step to start the replay', L.plotX + L.plotW / 2, (L.priceTop + L.priceBottom) / 2);
+    return;
+  }
+
+  // price scale
+  let pmin = Infinity, pmax = -Infinity, vmax = 0;
+  for (let i = lo; i <= hi; i++) {
+    if (bb.l[i] < pmin) pmin = bb.l[i]; if (bb.h[i] > pmax) pmax = bb.h[i]; if (bb.v[i] > vmax) vmax = bb.v[i];
+  }
+  let pad_ = (pmax - pmin) * 0.06; if (pad_ < 0.5) pad_ = 0.5;
+  pmin -= pad_; pmax += pad_;
+  L.autoSpan = pmax - pmin; L.autoCenter = (pmin + pmax) / 2;
+  if (S.ySpan != null) {                       // manual zoom: user-chosen span, still tracks the auto centre
+    const c0 = L.autoCenter + S.yOff;
+    pmin = c0 - S.ySpan / 2; pmax = c0 + S.ySpan / 2;
+  }
+  const py = p => L.priceTop + (pmax - p) / (pmax - pmin) * (L.priceBottom - L.priceTop);
+  L.pmin = pmin; L.pmax = pmax;
+  const rowPx = (L.priceBottom - L.priceTop) * ts / (pmax - pmin);
+  // 0 = plain candle, 1 = candle with embedded volume profile, 2 = full footprint (bid x ask numbers)
+  const fpMode = !S.fp ? 0 : (L.barW >= 44 && rowPx >= 8) ? 2 : (L.barW >= 14 ? 1 : 0);
+  L.fpMode = fpMode;
+  const deltaRow = L.volH >= 70;                // room for a per-bar delta line at the top of the volume pane
+  const volScale = L.volH - (deltaRow ? 26 : 4);
+  const vyf = v => L.volBottom - (vmax ? v / vmax : 0) * volScale;
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, L.plotX + L.plotW, cssH - L.axisH); ctx.clip();
+
+  // horizontal grid + price labels collected
+  const step = Math.max(ts, niceStep((pmax - pmin) / Math.max(3, (L.priceBottom - L.priceTop) / 55)));
+  const labels = [];
+  ctx.save(); ctx.beginPath(); ctx.rect(0, L.priceTop, L.plotX + L.plotW, L.priceBottom - L.priceTop); ctx.clip();
+  ctx.strokeStyle = C.grid; ctx.beginPath();
+  for (let v = Math.ceil(pmin / step) * step; v <= pmax; v += step) {
+    const y = Math.round(py(v)) + 0.5; ctx.moveTo(0, y); ctx.lineTo(L.plotX + L.plotW, y); labels.push([v, y]);
+  }
+  ctx.stroke(); ctx.restore();                 // (price-pane only: a panned/zoomed range must not draw into the volume pane)
+  // vertical grid + time labels collected
+  ctx.strokeStyle = C.grid; ctx.beginPath();
+  const tl = [];
+  if (bb.timeMode) {
+    // Time bars: label a bar only when it opens a new round time step (a multiple of the interval,
+    // e.g. :00 :05 :10 for 5 s bars), so every label on the axis is a clean multiple of the candle size.
+    const step = timeLabelStep(bb.N, L.barW, 80);
+    let lastX = -1e9;
+    for (let i = lo; i <= hi; i++) {
+      if (i > 0 && Math.floor(bb.t0[i] / step) === Math.floor(bb.t0[i - 1] / step)) continue;
+      const x = Math.round(barX(i)) + 0.5;
+      if (x - lastX < 70) continue;
+      lastX = x; ctx.moveTo(x, 0); ctx.lineTo(x, L.volBottom); tl.push([i, x]);
+    }
+  } else {
+    const spacing = Math.max(1, Math.ceil(95 / L.barW));
+    for (let i = Math.ceil(lo / spacing) * spacing; i <= hi; i += spacing) {
+      const x = Math.round(barX(i)) + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, L.volBottom); tl.push([i, x]);
+    }
+  }
+  ctx.stroke();
+
+  // day boundaries (the session crosses midnight ET)
+  ctx.strokeStyle = '#4a4f60'; ctx.setLineDash([4, 4]); ctx.beginPath();
+  const dayMark = [];
+  for (let i = Math.max(1, lo); i <= hi; i++) {
+    if (Math.floor(bb.t0[i] / 86400000) !== Math.floor(bb.t0[i - 1] / 86400000)) {
+      const x = Math.round(L.plotX + (i - L.first) * L.barW) + 0.5;
+      ctx.moveTo(x, 0); ctx.lineTo(x, L.volBottom); dayMark.push([x, fmtDate(bb.t0[i])]);
+    }
+  }
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // volume pane: bars coloured by delta (more bought at the ask = green); the bar's volume is printed on it
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+  for (let i = lo; i <= hi; i++) {
+    const x = barX(i), w = Math.max(1, L.barW * (fpMode === 2 ? 0.94 : 0.7));
+    const delta = bb.av[i] - bb.bv[i];
+    ctx.fillStyle = delta >= 0 ? 'rgba(67,214,95,.40)' : 'rgba(150,90,230,.50)';
+    const y = vyf(bb.v[i]), bh = L.volBottom - y; ctx.fillRect(x - w / 2, y, w, bh);
+    ctx.font = `10px ${SANS}`;
+    const vt = String(bb.v[i]);
+    if (ctx.measureText(vt).width <= L.barW - 2) {          // hidden when zoomed out too far to fit
+      ctx.fillStyle = C.text2;
+      ctx.fillText(vt, x, bh >= 14 ? y + 7 : y - 7);         // inside the bar's top, or just above a short bar
+    }
+    if (deltaRow) {
+      const dt = `D ${delta >= 0 ? '+' : ''}${delta}`;
+      if (ctx.measureText(dt).width <= L.barW - 2) { ctx.fillStyle = delta >= 0 ? C.buy : C.sell; ctx.fillText(dt, x, L.volTop + 8); }
+    }
+  }
+
+  // candles / profile / footprint
+  const lastI = count - 1, lastP = bb.c[lastI];
+  const lastSide = S.pos > 0 ? S.data.side[S.pos - 1] : 0;
+  const lastCol = lastSide >= 0 ? C.buy : C.sell, lastY = py(lastP);
+  ctx.save(); ctx.beginPath(); ctx.rect(0, L.priceTop, L.plotX + L.plotW, L.priceBottom - L.priceTop); ctx.clip();
+  for (let i = lo; i <= hi; i++) {
+    const cx = barX(i), o = bb.o[i], c = bb.c[i];
+    const col = fpMode === 0 ? (c > o ? C.up : c < o ? C.down : C.flat)
+                             : (c > o ? C.buy : c < o ? C.sell : C.flat);       // footprint candles: green up / purple down
+    if (fpMode === 0) {
+      const w = Math.max(1, Math.floor(L.barW * 0.7)), x = Math.round(cx);
+      ctx.fillStyle = col; ctx.strokeStyle = col; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x + 0.5, Math.round(py(bb.h[i]))); ctx.lineTo(x + 0.5, Math.round(py(bb.l[i]))); ctx.stroke();
+      const yo = py(o), yc = py(c), top = Math.min(yo, yc), hgt = Math.max(1, Math.abs(yo - yc));
+      ctx.fillRect(x - Math.floor(w / 2), Math.round(top), w, Math.round(hgt));
+    } else if (fpMode === 1) {
+      drawProfileCandle(bb.footprint(i), cx, L.barW * 0.9, o, c, bb.h[i], bb.l[i], col, py);
+    } else {
+      drawFootprint(bb.footprint(i), cx, L.barW * 0.94, o, c, bb.h[i], bb.l[i], col, py, rowPx);
+    }
+  }
+
+  // live last-price marker on the forming bar + dashed last-price line
+  ctx.strokeStyle = lastCol; ctx.setLineDash([2, 3]); ctx.lineWidth = 1; ctx.beginPath();
+  ctx.moveTo(0, Math.round(lastY) + 0.5); ctx.lineTo(L.plotX + L.plotW, Math.round(lastY) + 0.5); ctx.stroke(); ctx.setLineDash([]);
+  if (lastI >= lo && lastI <= hi) {
+    const cx = barX(lastI);
+    if (fpMode === 2) {
+      const g = fpGeom(cx, L.barW * 0.94, true);
+      const lvl = Math.round(lastP / ts), y1 = py(lvl * ts + ts / 2), y2 = py(lvl * ts - ts / 2);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+      ctx.strokeRect(g.fx0 + 0.5, y1 + 0.5, g.fW - 1, Math.max(1, y2 - y1 - 1));
+    } else {
+      ctx.fillStyle = lastCol; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(cx, lastY, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    }
+  }
+  ctx.restore();
+
+  // crosshair
+  let hover = -1, hoverRow = null, chPrice = null;
+  const m = S.mouse;
+  if (m && m.x >= L.plotX && m.x <= L.plotX + L.plotW && m.y >= 0 && m.y <= L.volBottom) {
+    // In the price pane the horizontal line snaps to the nearest 0.25 level (the tick size), not to the raw pixel.
+    let chY = m.y;
+    if (m.y >= L.priceTop && m.y <= L.priceBottom) {
+      const pv = pmax - (m.y - L.priceTop) / (L.priceBottom - L.priceTop) * (pmax - pmin);
+      chPrice = Math.round(pv / ts) * ts; chY = py(chPrice);
+    }
+    ctx.strokeStyle = C.cross; ctx.setLineDash([3, 3]); ctx.lineWidth = 1; ctx.beginPath();
+    ctx.moveTo(Math.round(m.x) + 0.5, 0); ctx.lineTo(Math.round(m.x) + 0.5, L.volBottom);
+    ctx.moveTo(0, Math.round(chY) + 0.5); ctx.lineTo(L.plotX + L.plotW, Math.round(chY) + 0.5);
+    ctx.stroke(); ctx.setLineDash([]);
+    const idx = Math.floor(L.first + (m.x - L.plotX) / L.barW);
+    if (idx >= 0 && idx < count) hover = idx;
+  }
+  ctx.restore();
+  if (hover >= 0 && fpMode >= 1 && chPrice != null) {
+    const fp = bb.footprint(hover), lvl = Math.round(chPrice / ts), j = lvl - fp.lo;
+    if (j >= 0 && j < fp.m) hoverRow = { price: lvl * ts, bid: fp.bid[j], ask: fp.ask[j], tot: fp.tot[j], poc: j === fp.poc };
+  }
+
+  // price axis
+  ctx.fillStyle = C.text; ctx.textAlign = 'left';
+  for (const [v, y] of labels) ctx.fillText(v.toFixed(2), L.plotX + L.plotW + 6, y);
+  tag(lastP.toFixed(2), L.plotX + L.plotW, lastY, lastSide >= 0 ? '#2a9d46' : '#7e45c2', '#fff');
+  if (chPrice != null) tag(chPrice.toFixed(2), L.plotX + L.plotW, py(chPrice), '#4a4f60', '#fff');
+  // time axis
+  ctx.textAlign = 'center'; ctx.fillStyle = C.text;
+  for (const [i, x] of tl) ctx.fillText(fmtHMS(bb.t0[i]), x, cssH - L.axisH / 2);
+  ctx.fillStyle = '#c5a35a';
+  for (const [x, txt] of dayMark) { ctx.textAlign = 'left'; ctx.fillText(' ' + txt, x, L.priceBottom - 8); }
+  ctx.textAlign = 'center';
+  if (hover >= 0) tag(fmtHMS(bb.t0[hover]), barX(hover), cssH - L.axisH / 2, '#4a4f60', '#fff', true);
+
+  // OHLC readout (hovered bar, or the forming bar)
+  const k = hover >= 0 ? hover : lastI;
+  const forming = k === bb.nb && bb.fill > 0;
+  const dur = (bb.t1[k] - bb.t0[k]) / 1000;
+  const chg = bb.c[k] - bb.o[k], delta = bb.av[k] - bb.bv[k];
+  ctx.textAlign = 'left'; ctx.font = `12px ${MONO}`;
+  let x = 8, y = 13;
+  const seg = (txt, col) => { ctx.fillStyle = col; ctx.fillText(txt, x, y); x += ctx.measureText(txt).width; };
+  // time bars: show the interval boundaries (multiples of the bar size); other bars: first -> last print
+  const span = bb.timeMode ? `${fmtHMS(bb.t0[k])}-${fmtHMS(bb.t0[k] + bb.N)}` : `${fmtHMS(bb.t0[k])}->${fmtHMS(bb.t1[k])} (${dur.toFixed(dur < 10 ? 2 : 0)}s)`;
+  seg(`#${k + 1}${forming ? ' (forming)' : ''}  ${span}   `, C.text);
+  const cc = chg > 0 ? C.up : chg < 0 ? C.down : C.flat;
+  seg(`O ${bb.o[k].toFixed(2)}  H ${bb.h[k].toFixed(2)}  L ${bb.l[k].toFixed(2)}  C ${bb.c[k].toFixed(2)}  `, cc);
+  seg(`(${chg >= 0 ? '+' : ''}${chg.toFixed(2)})`, cc);
+  x = 8; y = 29;
+  seg(`Vol ${bb.v[k]}  Prints ${bb.nt[k]}   Bid ${bb.bv[k]}  Ask ${bb.av[k]}   `, C.text);
+  seg(`Delta ${delta >= 0 ? '+' : ''}${delta}`, delta >= 0 ? C.buy : C.sell);
+  if (hoverRow) seg(`     @ ${hoverRow.price.toFixed(2)}  bid ${hoverRow.bid} x ask ${hoverRow.ask}  (vol ${hoverRow.tot}${hoverRow.poc ? ', POC' : ''})`, C.poc);
+  ctx.font = `11px ${SANS}`;
+}
+
+// Both footprint renderers share one layout (after the Deepchart reference figure), left to right:
+//     [ candle ]  [ SELL | BUY ]
+// The candle sits at the left edge of the bar; the volume profile sits to the RIGHT of it.  The profile is
+// split by a thin axis: sellers (volume traded at the bid) grow LEFT from the axis, buyers (at the ask) grow
+// RIGHT from it.  Each bar's length is that side's volume at the price, scaled to the largest single-side
+// volume in the bar.  In the wide layout the numbers sit beside the axis, on top of the bars.
+function fpGeom(cx, colW, numbers) {
+  const x0 = cx - colW / 2;
+  const zone = numbers ? 8 : Math.max(4, Math.min(9, Math.round(colW * 0.22)));       // candle strip width
+  const fx0 = x0 + zone + 2, fW = colW - zone - 2;                                     // profile area
+  return { x0, zone, spineX: x0 + zone / 2, fx0, fW, axisX: fx0 + fW / 2, half: fW / 2 };
+}
+function candleSpine(cx, cw, o, c, h, l, col, py) {
+  const ts = TICK_SIZE, x = Math.round(cx);
+  ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x + 0.5, Math.round(py(h + ts / 2))); ctx.lineTo(x + 0.5, Math.round(py(l - ts / 2))); ctx.stroke();
+  const yo = py(o), yc = py(c);
+  ctx.fillRect(Math.round(cx - cw / 2), Math.round(Math.min(yo, yc)), cw, Math.max(2, Math.round(Math.abs(yo - yc))));
+}
+function profileAxis(g, h, l, py) {
+  const ts = TICK_SIZE, x = Math.round(g.axisX);
+  ctx.strokeStyle = 'rgba(160,165,180,.40)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x + 0.5, Math.round(py(h + ts / 2))); ctx.lineTo(x + 0.5, Math.round(py(l - ts / 2))); ctx.stroke();
+}
+
+// Narrow bar (no numbers): candle at the left, profile bars to its right (sell left of the axis, buy right).
+// Volume-profile colour: the dominant side of a level (more than 25% above the other) keeps its colour,
+// the other side is grey; if neither dominates both are grey.
+function drawProfileCandle(fp, cx, colW, o, c, h, l, col, py) {
+  const ts = TICK_SIZE, g = fpGeom(cx, colW, false);
+  for (let j = 0; j < fp.m; j++) {
+    const b = fp.bid[j], a = fp.ask[j];
+    if (!b && !a) continue;
+    const price = (fp.lo + j) * ts, y1 = py(price + ts / 2), y2 = py(price - ts / 2), rh = Math.max(1, y2 - y1 - 1);
+    const dm = fp.dom[j];
+    if (b) { const w = Math.max(1, g.half * b / fp.maxSide); ctx.fillStyle = dm < 0 ? C.sellBar : C.greyBar; ctx.fillRect(g.axisX - w, y1 + 0.5, w, rh); }
+    if (a) { const w = Math.max(1, g.half * a / fp.maxSide); ctx.fillStyle = dm > 0 ? C.buyBar : C.greyBar; ctx.fillRect(g.axisX, y1 + 0.5, w, rh); }
+    if (j === fp.poc) { ctx.strokeStyle = 'rgba(245,197,66,.8)'; ctx.lineWidth = 1; ctx.strokeRect(g.fx0 + 0.5, y1 + 0.5, g.fW - 1, rh); }
+  }
+  profileAxis(g, h, l, py);
+  candleSpine(g.spineX, Math.max(3, Math.round(g.zone * 0.6)), o, c, h, l, col, py);
+}
+
+// Wide bar: candle | sell number + bar | axis | buy bar + number, one row per price level.  A level with
+// trades on only one side shows 0 on the other; a level with no trades at all is left blank.
+//  - Imbalance (rule and font from es_training/view_data/candlestick_viewer.html): buy >= 3x the sell one
+//    tick below, or sell >= 3x the buy one tick above (the opposite volume must be > 0).  That number is
+//    drawn in purple (sell) / green (buy) instead of white (same light weight as the other numbers).
+//  - Profile colour per level: buyers > 125% of sellers => buy bar green, sell bar grey; sellers > 125% of
+//    buyers => sell bar purple, buy bar grey; otherwise both grey.
+//  - The POC row is outlined (profile area only), with just a faint tint.
+function drawFootprint(fp, cx, colW, o, c, h, l, col, py, rowPx) {
+  const ts = TICK_SIZE, g = fpGeom(cx, colW, true);
+  // font size follows both the row height and the width available beside the axis (3 digits ~ 1.7 em)
+  const fs = Math.max(7, Math.min(10, Math.floor(rowPx - 1), Math.floor((g.half - 4) / 1.7)));
+  ctx.textBaseline = 'middle';
+  for (let j = 0; j < fp.m; j++) {
+    const b = fp.bid[j], a = fp.ask[j];
+    if (!b && !a) continue;                                  // nothing traded at this price
+    const price = (fp.lo + j) * ts, y1 = py(price + ts / 2), y2 = py(price - ts / 2);
+    const top = y1 + 0.5, rh = Math.max(1, y2 - y1 - 1), ym = (y1 + y2) / 2;
+    const dm = fp.dom[j];
+    if (j === fp.poc) { ctx.fillStyle = 'rgba(245,197,66,.07)'; ctx.fillRect(g.fx0, top, g.fW, rh); }
+    if (b) { const w = Math.max(1, g.half * b / fp.maxSide); ctx.fillStyle = dm < 0 ? C.sellBar : C.greyBar; ctx.fillRect(g.axisX - w, top, w, rh); }
+    if (a) { const w = Math.max(1, g.half * a / fp.maxSide); ctx.fillStyle = dm > 0 ? C.buyBar : C.greyBar; ctx.fillRect(g.axisX, top, w, rh); }
+    const sellBold = fp.sellImb[j] === 1, buyBold = fp.buyImb[j] === 1;
+    ctx.textAlign = 'right';                                 // 0 is printed for the empty side
+    numFont(fs);                                             // imbalance = colour only, same light weight
+    ctx.fillStyle = sellBold ? C.sellImbText : C.text2; ctx.fillText(String(b), g.axisX - 3, ym);
+    ctx.textAlign = 'left';
+    numFont(fs);
+    ctx.fillStyle = buyBold ? C.buyImbText : C.text2; ctx.fillText(String(a), g.axisX + 3, ym);
+    if (j === fp.poc) { ctx.strokeStyle = 'rgba(245,197,66,.85)'; ctx.lineWidth = 1; ctx.strokeRect(g.fx0 + 0.5, top, g.fW - 1, rh); }
+  }
+  profileAxis(g, h, l, py);
+  candleSpine(g.spineX, 4, o, c, h, l, col, py);
+}
+function tag(txt, xRight, y, bg, fg, centered) {
+  const w = ctx.measureText(txt).width + 10, h = 16;
+  const x = centered ? xRight - w / 2 : xRight;
+  ctx.fillStyle = bg; ctx.fillRect(x, y - h / 2, w, h);
+  ctx.fillStyle = fg; ctx.textAlign = 'left'; ctx.fillText(txt, x + 5, y);
+}
+
+// ---------- interaction ----------
+// The price scale is the strip on the right of the plot (labels 6135.00 etc).
+function onSplitter(m) { return !!m && m.y >= L.volTop - 8 && m.y <= L.volTop + 2; }
+function onPriceScale(m) { return m && m.x > L.plotX + L.plotW && m.y >= L.priceTop && m.y <= L.priceBottom; }
+function priceAt(y) { return L.pmax - (y - L.priceTop) / (L.priceBottom - L.priceTop) * (L.pmax - L.pmin); }
+cv.addEventListener('mousemove', e => {
+  const r = cv.getBoundingClientRect(); S.mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
+  if (!S.drag && !S.axisDrag) cv.style.cursor = (S.splitDrag || onSplitter(S.mouse)) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair';
+  if (S.splitDrag) {                           // drag the divider: resize the volume pane
+    const h = (cssH - L.axisH) - (S.mouse.y + 3);
+    S.volFrac = Math.max(36 / L.availH, Math.min(0.7, h / L.availH));
+  } else if (S.axisDrag) {                            // drag on the price scale: pan vertically
+    const ppp = (L.pmax - L.pmin) / (L.priceBottom - L.priceTop);
+    if (S.ySpan == null) S.ySpan = L.pmax - L.pmin;
+    S.yOff = S.axisDrag.yOff + (S.mouse.y - S.axisDrag.y) * ppp;
+  } else if (S.drag) {                         // drag the chart in any direction: x pans time, y pans price
+    const D = S.drag, dx = S.mouse.x - D.x, dy = S.mouse.y - D.y;
+    if (Math.abs(dx) > 2) D.xMoved = true;
+    if (Math.abs(dy) > 2) D.yMoved = true;
+    if (D.xMoved) { S.viewEnd = D.viewEnd - dx / L.barW; S.follow = false; updateFollowBtn(); }
+    if (D.yMoved) {
+      if (S.ySpan == null) S.ySpan = D.span0;                 // first vertical move freezes the auto-fit span
+      S.yOff = D.yOff + dy * D.ppp;
+    }
+  }
+  render();
+});
+cv.addEventListener('mouseleave', () => { S.mouse = null; cv.style.cursor = 'crosshair'; render(); });
+cv.addEventListener('mousedown', e => {
+  const r = cv.getBoundingClientRect();
+  const mm = { x: e.clientX - r.left, y: e.clientY - r.top };
+  if (onSplitter(mm)) { S.splitDrag = true; cv.style.cursor = 'row-resize'; return; }
+  if (onPriceScale(mm)) { S.axisDrag = { y: mm.y, yOff: S.yOff }; cv.style.cursor = 'ns-resize'; return; }
+  S.drag = { x: mm.x, y: mm.y, viewEnd: S.viewEnd, yOff: S.yOff, span0: L.pmax - L.pmin,
+             ppp: (L.pmax - L.pmin) / (L.priceBottom - L.priceTop), xMoved: false, yMoved: false };
+  cv.style.cursor = 'grabbing';
+});
+window.addEventListener('mouseup', () => {
+  S.drag = null; S.axisDrag = null; S.splitDrag = false;
+  cv.style.cursor = onSplitter(S.mouse) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair'; render();
+});
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  if (!S.bb) return;
+  const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const f = e.deltaY > 0 ? 1.12 : 1 / 1.12;
+  if (onPriceScale({ x: mx, y: my })) {        // scroll on the price scale: zoom the y-axis (up = in, down = out)
+    const span0 = S.ySpan != null ? S.ySpan : L.pmax - L.pmin;
+    const span1 = Math.max(2 * TICK_SIZE, Math.min(500, span0 * f));
+    const pa = priceAt(my), frac = (L.pmax - pa) / (L.pmax - L.pmin);     // keep the price under the cursor fixed
+    const newMax = pa + frac * span1, newCenter = newMax - span1 / 2;
+    S.ySpan = span1; S.yOff = newCenter - L.autoCenter;
+    render(); return;
+  }
+  const nv = Math.max(4, Math.min(3000, S.vis * f));
+  if (!S.follow) {                      // keep the bar under the cursor fixed
+    const frac = Math.max(0, Math.min(1, (mx - L.plotX) / L.plotW));
+    const idx = L.first + frac * S.vis;
+    S.viewEnd = idx - frac * nv + nv;
+  }
+  S.vis = nv; render();
+}, { passive: false });
+cv.addEventListener('dblclick', () => {
+  if (onSplitter(S.mouse)) { S.volFrac = 0.18; render(); return; }          // double-click the divider: default height
+  if (onPriceScale(S.mouse)) { S.ySpan = null; S.yOff = 0; render(); return; }      // double-click the scale: auto-fit again
+  S.follow = true; updateFollowBtn(); render();
+});
+
+function setFootprint(on) {
+  S.fp = on; $('fp').classList.toggle('on', on);
+  if (on && S.vis > 30) S.vis = FP_VIS;            // footprint needs wide bars
+  if (!on && S.vis < 40) S.vis = CANDLE_VIS;
+  render();
+}
+function setTape(on) { S.tape = on; $('tape').classList.toggle('hide', !on); $('tapebtn').classList.toggle('on', on); lastTapeKey = ''; }
+function syncUnitControls() {
+  const time = $('unit').value === 'time';
+  $('barsize').style.display = time ? 'none' : ''; $('ivl').style.display = time ? '' : 'none';
+}
+
+$('play').onclick = () => setPlaying(!S.playing);
+$('steptick').onclick = () => { setPlaying(false); stepTicks(1); };
+$('stepback').onclick = () => { setPlaying(false); stepTicks(-1); };
+$('stepbar').onclick = () => { setPlaying(false); stepBar(); };
+$('tostart').onclick = () => { setPlaying(false); seek(0); };
+$('follow').onclick = () => { S.follow = !S.follow; updateFollowBtn(); render(); };
+$('fp').onclick = () => setFootprint(!S.fp);
+$('tapebtn').onclick = () => setTape(!S.tape);
+$('go').onclick = goTime;
+$('gotime').addEventListener('keydown', e => { if (e.key === 'Enter') goTime(); });
+function goTime() {
+  const tod = parseTod($('gotime').value);
+  if (tod == null) { $('gotime').style.borderColor = '#ef5350'; return; }
+  $('gotime').style.borderColor = '';
+  const idx = S.data ? seekIndexForTod(S.data, tod) : -1;
+  if (idx < 0) { $('gotime').style.borderColor = '#ef5350'; return; }
+  setPlaying(false); seek(idx);
+}
+$('mode').onchange = () => { fillSpeeds(); if (S.playing) syncSim(); };
+$('speed').onchange = () => { if (S.playing) syncSim(); };
+function onBarChange() { syncUnitControls(); if (!S.data) return; rebuildBars(S.pos); S.follow = true; updateFollowBtn(); render(); }
+$('barsize').addEventListener('change', onBarChange);
+$('unit').addEventListener('change', onBarChange);
+$('ivl').addEventListener('change', onBarChange);
+$('scrub').addEventListener('input', e => { S.scrubbing = true; seek(+e.target.value); });
+$('scrub').addEventListener('change', () => { S.scrubbing = false; });
+window.addEventListener('keydown', e => {
+  const tag_ = (e.target.tagName || '').toLowerCase();
+  if (tag_ === 'input' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
+  if (tag_ === 'select') return;
+  if (e.key === ' ') { e.preventDefault(); setPlaying(!S.playing); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); setPlaying(false); e.shiftKey ? stepBar() : stepTicks(1); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); setPlaying(false); stepTicks(-1); }
+  else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    const s = $('speed'); const j = s.selectedIndex + (e.key === 'ArrowUp' ? 1 : -1);
+    if (j >= 0 && j < s.options.length) { e.preventDefault(); s.selectedIndex = j; if (S.playing) syncSim(); }
+  }
+  else if (e.key === 'Home') { setPlaying(false); seek(0); }
+  else if (e.key === 'End') { S.follow = true; updateFollowBtn(); render(); }
+  else if (e.key === 'f' || e.key === 'F') setFootprint(!S.fp);
+  else if (e.key === 't' || e.key === 'T') setTape(!S.tape);
+});
+window.addEventListener('resize', resize);
+new ResizeObserver(resize).observe(cv);
+
+// ---------- recording ----------
+// rec=<seconds>: play from the start time and record chart + tape + status bar into a WebM, then POST it
+// to the serving view_ticks.py (/upload).  Progress goes to /recstatus.  Driven by record_replay.py.
+function postStatus(msg) { return fetch('recstatus', { method: 'POST', body: msg }).catch(() => {}); }
+const REC_STATUS_H = 24;
+// size=WxH pins the page layout so the video is exactly WxH whatever window the (headless) browser opened.
+function startRecording(secs) {
+  const m = /^(\d+)x(\d+)$/.exec(new URLSearchParams(location.search).get('size') || '');
+  if (!m) { beginRecording(secs); return; }
+  const W = +m[1], H = +m[2], body = document.body;
+  document.documentElement.style.overflow = 'hidden';
+  body.style.width = W + 'px';
+  const chrome = $('toolbar').offsetHeight + $('scrubrow').offsetHeight + $('status').offsetHeight;
+  body.style.height = (H - REC_STATUS_H + chrome) + 'px';
+  resize();
+  requestAnimationFrame(() => requestAnimationFrame(() => beginRecording(secs)));
+}
+function beginRecording(secs) {
+  const MR = window.MediaRecorder;
+  if (!MR || !HTMLCanvasElement.prototype.captureStream) { postStatus('error: MediaRecorder / canvas.captureStream not supported'); return; }
+  const box = $('chartbox').getBoundingClientRect();
+  const cw = Math.round(box.width), ch = Math.round(box.height);
+  const tapeW = S.tape ? Math.round($('tape').getBoundingClientRect().width) : 0, STATUS_H = REC_STATUS_H;
+  const rc = document.createElement('canvas');
+  rc.width = (cw + tapeW) & ~1; rc.height = (ch + STATUS_H) & ~1;          // encoders want even sizes
+  const rx = rc.getContext('2d');
+  // fmt=mp4: H.264 MP4 where the browser can record it (Chrome / Edge 126+), else WebM.
+  const WEBM = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const MP4 = ['video/mp4;codecs=avc1.640033', 'video/mp4;codecs=avc1.640028', 'video/mp4;codecs=avc1'];
+  const wantMp4 = new URLSearchParams(location.search).get('fmt') === 'mp4';
+  const mime = (wantMp4 ? MP4.concat(WEBM) : WEBM).find(m => MR.isTypeSupported(m)) || '';
+  let rec;
+  try { rec = new MR(rc.captureStream(30), mime ? { mimeType: mime, videoBitsPerSecond: 8e6 } : {}); }
+  catch (err) { postStatus('error: MediaRecorder ' + err); return; }
+  const chunks = [];
+  rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+  rec.onerror = e => postStatus('error: MediaRecorder ' + ((e.error && e.error.message) || e.error || 'failed'));
+  rec.onstop = async () => {
+    setPlaying(false);
+    const blob = new Blob(chunks, { type: rec.mimeType || 'video/webm' });
+    if (!blob.size) { postStatus('error: the recorder produced no data'); return; }
+    await postStatus(`uploading ${blob.size} bytes`);
+    try {
+      const r = await fetch('upload', { method: 'POST', body: blob });
+      postStatus(r.ok ? 'done' : 'error: upload HTTP ' + r.status);
+    } catch (err) { postStatus('error: upload ' + err); }
+  };
+  const paint = () => {
+    rx.fillStyle = C.bg; rx.fillRect(0, 0, rc.width, rc.height);
+    rx.drawImage(cv, 0, 0, cw, ch);
+    const d = S.data;
+    if (tapeW) {
+      rx.fillStyle = '#171b26'; rx.fillRect(cw, 0, tapeW, ch);
+      rx.fillStyle = C.axis; rx.fillRect(cw, 0, 1, ch); rx.fillRect(cw, 22, tapeW, 1);
+      rx.textBaseline = 'middle'; rx.textAlign = 'left';
+      rx.font = `11px ${SANS}`; rx.fillStyle = '#8b8f9a'; rx.fillText('Time & Sales (ET)', cw + 8, 11);
+      for (let i = S.pos - 1, y = 23; i >= 0 && y + 15 <= ch; i--, y += 15) {
+        if (i === S.pos - 1) { rx.fillStyle = 'rgba(255,255,255,.08)'; rx.fillRect(cw + 1, y, tapeW - 1, 15); }
+        rx.fillStyle = d.side[i] > 0 ? C.buy : C.sell;
+        rx.font = `${d.q[i] >= 10 ? 'bold ' : ''}11px ${MONO}`;
+        rx.textAlign = 'left';  rx.fillText(`${fmtHMS(d.t[i])}.${pad(d.t[i] % 1000, 3)}`, cw + 8, y + 8);
+        rx.textAlign = 'right'; rx.fillText(d.p[i].toFixed(2), cw + tapeW - 48, y + 8);
+        rx.fillText(String(d.q[i]), cw + tapeW - 8, y + 8);
+      }
+    }
+    rx.fillStyle = '#1e222d'; rx.fillRect(0, ch, rc.width, STATUS_H);
+    rx.fillStyle = C.axis; rx.fillRect(0, ch, rc.width, 1);
+    rx.fillStyle = '#d1d4dc'; rx.font = `13px ${SANS}`; rx.textAlign = 'left'; rx.textBaseline = 'middle';
+    rx.fillText($('status').textContent, 10, ch + STATUS_H / 2);
+  };
+  let on = true;
+  const loop = () => { if (!on) return; paint(); requestAnimationFrame(loop); };
+  loop();
+  rec.start(1000);
+  setPlaying(true);
+  postStatus(`recording ${secs}s at ${rc.width}x${rc.height} (window ${innerWidth}x${innerHeight}, ${rec.mimeType || 'default'}) from ${S.pos > 0 ? fmtFull(S.data.t[S.pos - 1]) : '-'} ET`);
+  setTimeout(() => { paint(); on = false; rec.stop(); }, secs * 1000);
+}
+
+// ---------- loading ----------
+$('open').onclick = () => $('file').click();
+$('file').onchange = e => { if (e.target.files[0]) loadFile(e.target.files[0]); };
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => { e.preventDefault(); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+function loadFile(f) {
+  setPlaying(false); showMsg('Reading ' + f.name + '...');
+  f.arrayBuffer().then(b => setData(b, f.name)).catch(err => showMsg('Failed: ' + err));
+}
+// Optional URL parameters (handy for bookmarks):
+//   unit=ticks|contracts|time  n=<size>  ivl=1|5|15|60 (seconds, with unit=time)
+//   t=HH:MM[:SS]  fp=0|1  tape=0|1  vis=<bars on screen>  mode=rt|rate  speed=<n>  play=1
+//   rec=<seconds>  size=WxH  fmt=webm|mp4  (record a video; needs view_ticks.py serving with an upload target, see record_replay.py)
+async function autoLoad() {
+  const q = new URLSearchParams(location.search);
+  if (q.get('n')) $('barsize').value = q.get('n');
+  if (q.get('unit')) $('unit').value = q.get('unit');
+  if (q.get('ivl')) $('ivl').value = q.get('ivl');
+  syncUnitControls();
+  if (q.get('t')) $('gotime').value = q.get('t');
+  if (q.get('fp') === '0') setFootprint(false);
+  if (q.get('tape') === '0') setTape(false);
+  if (q.get('vis')) S.vis = Math.max(4, +q.get('vis') || S.vis);
+  if (q.get('mode') === 'rt' || q.get('mode') === 'rate') { $('mode').value = q.get('mode'); fillSpeeds(); }
+  if (q.get('speed')) { $('speed').value = q.get('speed'); if ($('speed').value !== q.get('speed')) {
+    const o = document.createElement('option'); o.value = o.textContent = q.get('speed'); $('speed').appendChild(o); $('speed').value = o.value; } }
+  if (location.protocol === 'file:') { showMsg('Choose or drop a .data file'); return; }
+  try {
+    const r = await fetch('data');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const name = r.headers.get('X-File-Name') || 'data';
+    showMsg('Decoding ' + name + '...');
+    const buf = await r.arrayBuffer();
+    setData(buf, name);
+  } catch (err) {
+    showMsg('Choose or drop a .data file');
+    if (q.get('rec')) postStatus('error: loading data failed: ' + err);
+  }
+}
+
+fillSpeeds();
+syncUnitControls();
+resize();
+autoLoad();
+window.__tv = S;     // handy for debugging in the console
+})();
+</script>
+</body>
+</html>
