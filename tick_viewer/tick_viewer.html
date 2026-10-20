@@ -89,6 +89,10 @@
     <button id="go">Go</button>
     <button id="follow" class="on" title="Keep newest bar in view (End)">Follow</button>
     <button id="tapebtn" class="on" title="Time & Sales tape (T)">Tape</button>
+    <button id="spdbtn" class="on" title="Speed-of-tape pane: peak prints/s per candle (S)">Speed</button>
+    <label for="spdmin" title="A candle gets a speed-of-tape bar only when its peak is above this many prints per second">&gt;</label>
+    <input id="spdmin" type="number" min="0" max="10000" value="100" step="10" style="width:62px"
+           title="Speed-of-tape threshold (prints / s)">
   </div>
   <div class="grp">
     <button id="open">Open .data...</button>
@@ -117,6 +121,8 @@
 // ==== CORE BEGIN ====
 const REC_SIZE = 57;
 const TICK_SIZE = 0.25;                        // ES minimum price increment
+const SPEED_WINDOW_MS = 1000;                  // speed of tape = prints in the trailing second
+const SPEED_MIN = 100;                         // default speed-of-tape threshold (prints / s); the toolbar box overrides it
 const IMBALANCE_RATIO = 3;                     // same 3x ratio as es_training/feature_pipeline.py
 const DOMINANCE = 0.25;                        // one side must exceed the other by more than 25% to 'win' a price level
 // Record layout (little-endian, packed):
@@ -150,7 +156,15 @@ function parseTicks(buf) {
   }
   let sorted = true;
   for (let i = 1; i < n; i++) if (t[i] < t[i - 1]) { sorted = false; break; }
-  return { n, t, p, q, side, trailing: buf.byteLength - n * REC_SIZE, sorted };
+  // Speed of tape: prints in the trailing second (t-1000 ms, t] at each print.  It only looks backwards,
+  // so a replay shows exactly the value that was live at that moment.  Bars clip this window to their own
+  // first print (BarBuilder.speedAt), so a bar's speed never counts prints of the previous bar.
+  const spd = new Int32Array(n);
+  for (let i = 0, j = 0; i < n; i++) {
+    while (t[j] <= t[i] - SPEED_WINDOW_MS) j++;
+    spd[i] = i - j + 1;
+  }
+  return { n, t, p, q, side, spd, trailing: buf.byteLength - n * REC_SIZE, sorted };
 }
 
 // Builds bars incrementally, one print at a time.
@@ -167,7 +181,7 @@ class BarBuilder {
     let cap;
     if (this.timeMode) {
       const span = data.n ? data.t[data.n - 1] - data.t[0] : 0;
-      cap = Math.min(data.n, Math.floor(span / this.N) + 2) + 3;
+      cap = Math.floor(span / this.N) + 5;                 // one slot per interval, empty ones included
     } else {
       let total = data.n;
       if (this.contracts) { total = 0; for (let i = 0; i < data.n; i++) total += data.q[i]; }
@@ -178,6 +192,7 @@ class BarBuilder {
     this.v = F();                         // contracts in the bar
     this.bv = F(); this.av = F();         // contracts sold at the bid / bought at the ask
     this.nt = I();                        // prints in the bar
+    this.sp = I();                        // max speed of tape (prints in any trailing second) reached in the bar
     this.t0 = F(); this.t1 = F();         // bar start (interval start for time bars) / last print
     this.i0 = I(); this.i1 = I();         // first / last record index in the bar
     this.fv = F(); this.lv = F();         // contracts of the first / last record that belong to this bar
@@ -190,12 +205,21 @@ class BarBuilder {
     if (this.timeMode) return this.N >= 60000 ? `${this.N / 60000}min` : `${this.N / 1000}s`;
     return `${this.N.toLocaleString()} ${this.contracts ? 'contracts' : 'ticks'}`;
   }
+  // Speed of tape at record i inside bar k: prints in the trailing second, counting only this bar's prints.
+  // So it is at most the bar's print count, which is at most its volume.
+  speedAt(i, k) {
+    const sp = this.d.spd;
+    return sp ? i - Math.max(i - sp[i] + 1, this.i0[k]) + 1 : 0;
+  }
   _piece(k, isNew, price, i, t0, tm, pv, ask) {
+    if (isNew) this.i0[k] = i;
+    const s = this.speedAt(i, k);
     if (isNew) {
       this.o[k] = this.h[k] = this.l[k] = this.c[k] = price;
-      this.v[k] = 0; this.bv[k] = 0; this.av[k] = 0; this.nt[k] = 0;
+      this.v[k] = 0; this.bv[k] = 0; this.av[k] = 0; this.nt[k] = 0; this.sp[k] = s;
       this.t0[k] = t0; this.i0[k] = i; this.fv[k] = pv;
     } else {
+      if (s > this.sp[k]) this.sp[k] = s;
       if (price > this.h[k]) this.h[k] = price;
       if (price < this.l[k]) this.l[k] = price;
       this.c[k] = price;
@@ -209,7 +233,7 @@ class BarBuilder {
       const key = Math.floor(tm / N);
       if (this.fill > 0 && key !== this.curKey) { this.nb++; this.fill = 0; }
       const isNew = this.fill === 0;
-      if (isNew) this.curKey = key;
+      if (isNew) { this._emptyUpTo(key, i); this.curKey = key; }
       this._piece(this.nb, isNew, price, i, key * N, tm, size, ask);
       this.fill = 1;
       return;
@@ -221,6 +245,27 @@ class BarBuilder {
       this.fill += take; rem -= take;
       if (this.fill >= N) { this.nb++; this.fill = 0; }
     }
+  }
+  // Time bars: every interval gets a bar, so each candle is exactly N wide on the time axis.  An interval with
+  // no prints becomes a flat, zero-volume bar at the previous close (nt = 0, empty record range i0 > i1).
+  _emptyUpTo(key, i) {
+    if (this.curKey !== this.curKey) return;            // NaN: no bar yet, nothing to fill
+    for (let g = this.curKey + 1; g < key; g++) {
+      const k = this.nb++, pc = this.c[k - 1];
+      this.o[k] = this.h[k] = this.l[k] = this.c[k] = pc;
+      this.v[k] = this.bv[k] = this.av[k] = this.nt[k] = this.sp[k] = 0;
+      this.t0[k] = this.t1[k] = g * this.N; this.i0[k] = i; this.i1[k] = i - 1; this.fv[k] = this.lv[k] = 0;
+    }
+  }
+  // Replay clock for time bars: once wall-clock time tm has passed an interval, close the forming bar and add
+  // empty bars for the quiet intervals, without waiting for the next print.
+  closeTo(tm) {
+    if (!this.timeMode || this.curKey !== this.curKey) return;
+    const key = Math.floor(tm / this.N);
+    if (key <= this.curKey) return;
+    if (this.fill > 0) { this.nb++; this.fill = 0; }
+    this._emptyUpTo(key, this.pos);
+    this.curKey = key - 1;
   }
   advanceTo(target) { while (this.pos < target) this.add(this.pos++); }
   rebuildTo(target) { this.reset(); this.advanceTo(target); }
@@ -345,13 +390,16 @@ const SPEEDS = {
 const DEFAULT_SPEED = { rt: 10, rate: 100 };
 const MAX_PER_FRAME = 300000;
 const FP_VIS = 14, CANDLE_VIS = 120;
+const SPD_PX = 72;                             // default speed-of-tape pane height
 
 const S = {
   data: null, name: '', bb: null,
   pos: 0, playing: false, simTime: 0, acc: 0, lastTs: null,
   follow: true, vis: FP_VIS, viewEnd: 0, fp: true, tape: true,
   mouse: null, drag: null, scrubbing: false,
-  volFrac: 0.18, splitDrag: false,           // volume pane height as a fraction of the chart area (drag the divider)
+  volFrac: 0.18, splitDrag: null,            // volume pane height as a fraction of the chart area (drag the divider)
+  spd: true, spdPx: SPD_PX,                  // speed-of-tape pane (between price and volume): on/off, height in px
+  spdMin: SPEED_MIN,                         // speed-of-tape threshold: only candles whose peak is above it get a bar
   ySpan: null, yOff: 0, axisDrag: null,      // manual price-scale zoom (ySpan = visible points; null = auto-fit)
 };
 
@@ -451,6 +499,7 @@ function frame(ts) {
     target = Math.min(d.n, S.pos + Math.min(k, MAX_PER_FRAME));
   }
   if (target > S.pos) { bb.advanceTo(target); S.pos = bb.pos; if ($('mode').value !== 'rt') S.simTime = d.t[S.pos - 1]; }
+  bb.closeTo(S.simTime);                       // time bars close on the clock, even in a quiet interval
   render();
   if (S.pos >= d.n) { setPlaying(false); return; }
   requestAnimationFrame(frame);
@@ -512,9 +561,12 @@ function geom() {
   L.plotX = L.padL; L.plotW = Math.max(10, cssW - L.axisW - L.padL);
   const avail = cssH - L.axisH - L.padT;
   L.availH = avail;
-  L.volH = Math.max(36, Math.min(Math.floor(avail * 0.7), Math.floor(avail * S.volFrac)));
-  L.priceTop = L.padT; L.priceBottom = cssH - L.axisH - L.volH - 6;
+  // bottom stack, top to bottom: price | speed of tape | volume (each pane is separated by a 6 px draggable gap)
+  L.spdH = S.spd ? Math.max(36, Math.min(Math.floor(avail * 0.4), S.spdPx)) : 0;
+  L.volH = Math.max(36, Math.min(Math.floor(avail * 0.7) - L.spdH, Math.floor(avail * S.volFrac)));
   L.volTop = cssH - L.axisH - L.volH; L.volBottom = cssH - L.axisH;
+  L.spdTop = L.volTop - L.spdH;                         // pane incl. its 6 px gap; bars use [spdTop, volTop - 6]
+  L.priceTop = L.padT; L.priceBottom = (S.spd ? L.spdTop : L.volTop) - 6;
 }
 function barX(i) { return L.plotX + (i + 0.5 - L.first) * L.barW; }
 
@@ -541,11 +593,16 @@ function draw() {
   const by = Math.round(L.volBottom) + 0.5; ctx.moveTo(0, by); ctx.lineTo(cssW, by);
   ctx.stroke();
   // draggable divider between the price pane and the volume pane
-  const hotSplit = S.splitDrag || onSplitter(S.mouse), vy0 = Math.round(L.volTop - 3) + 0.5;
-  ctx.strokeStyle = hotSplit ? '#8a90a3' : C.axis; ctx.lineWidth = hotSplit ? 2 : 1;
-  ctx.beginPath(); ctx.moveTo(0, vy0); ctx.lineTo(L.plotX + L.plotW, vy0); ctx.stroke(); ctx.lineWidth = 1;
-  ctx.fillStyle = hotSplit ? '#8a90a3' : '#4a4f60';
-  ctx.fillRect(Math.round(L.plotX + L.plotW / 2 - 16), Math.round(vy0 - 1.5), 32, 3);
+  const hotNow = S.splitDrag || onSplitter(S.mouse);
+  const divider = (yTop, hot) => {
+    const vy0 = Math.round(yTop - 3) + 0.5;
+    ctx.strokeStyle = hot ? '#8a90a3' : C.axis; ctx.lineWidth = hot ? 2 : 1;
+    ctx.beginPath(); ctx.moveTo(0, vy0); ctx.lineTo(L.plotX + L.plotW, vy0); ctx.stroke(); ctx.lineWidth = 1;
+    ctx.fillStyle = hot ? '#8a90a3' : '#4a4f60';
+    ctx.fillRect(Math.round(L.plotX + L.plotW / 2 - 16), Math.round(vy0 - 1.5), 32, 3);
+  };
+  divider(S.spd ? L.spdTop : L.volTop, hotNow === (S.spd ? 'spd' : 'vol'));
+  if (S.spd) divider(L.volTop, hotNow === 'vol');
 
   if (count === 0 || lo > hi) {
     ctx.fillStyle = C.text; ctx.textAlign = 'center';
@@ -554,9 +611,10 @@ function draw() {
   }
 
   // price scale
-  let pmin = Infinity, pmax = -Infinity, vmax = 0;
+  let pmin = Infinity, pmax = -Infinity, vmax = 0, smax = 0;
   for (let i = lo; i <= hi; i++) {
     if (bb.l[i] < pmin) pmin = bb.l[i]; if (bb.h[i] > pmax) pmax = bb.h[i]; if (bb.v[i] > vmax) vmax = bb.v[i];
+    if (bb.sp[i] > smax) smax = bb.sp[i];
   }
   let pad_ = (pmax - pmin) * 0.06; if (pad_ < 0.5) pad_ = 0.5;
   pmin -= pad_; pmax += pad_;
@@ -623,6 +681,7 @@ function draw() {
   // volume pane: bars coloured by delta (more bought at the ask = green); the bar's volume is printed on it
   ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
   for (let i = lo; i <= hi; i++) {
+    if (bb.nt[i] === 0) continue;                           // empty interval: no volume
     const x = barX(i), w = Math.max(1, L.barW * (fpMode === 2 ? 0.94 : 0.7));
     const delta = bb.av[i] - bb.bv[i];
     ctx.fillStyle = delta >= 0 ? 'rgba(67,214,95,.40)' : 'rgba(150,90,230,.50)';
@@ -639,6 +698,34 @@ function draw() {
     }
   }
 
+  // speed-of-tape pane: one bar per candle = the most prints seen in any trailing second during that candle.
+  // Only candles whose peak is above S.spdMin get a bar (quiet candles stay empty); the dashed line is that threshold.
+  let spdTopV = 0, spdY0 = 0, spdY1 = 0, sy = null;
+  if (S.spd) {
+    spdY0 = L.spdTop + 2; spdY1 = L.volTop - 6;                  // bar area [spdY0, spdY1], bars grow up from spdY1
+    spdTopV = Math.max(2 * S.spdMin, 10, Math.ceil(smax * 1.12));    // value at the top of the pane
+    sy = v => spdY1 - Math.min(1, v / spdTopV) * (spdY1 - spdY0 - 10);
+    ctx.save(); ctx.beginPath(); ctx.rect(0, L.spdTop, L.plotX + L.plotW, spdY1 - L.spdTop + 1); ctx.clip();
+    ctx.strokeStyle = '#4a4f60'; ctx.setLineDash([3, 4]); ctx.beginPath();
+    const ty = Math.round(sy(S.spdMin)) + 0.5; ctx.moveTo(0, ty); ctx.lineTo(L.plotX + L.plotW, ty); ctx.stroke(); ctx.setLineDash([]);
+    ctx.textAlign = 'center'; ctx.font = `10px ${SANS}`;
+    for (let i = lo; i <= hi; i++) {
+      const v = bb.sp[i]; if (v <= S.spdMin) continue;
+      const x = barX(i), w = Math.max(1, L.barW * (fpMode === 2 ? 0.94 : 0.7));
+      const sell = bb.av[i] - bb.bv[i] < 0, y = sy(v), bh = spdY1 - y;
+      ctx.fillStyle = sell ? 'rgba(150,60,230,.85)' : 'rgba(150,235,165,.70)';
+      ctx.fillRect(x - w / 2, y, w, bh);
+      const st = fmtSpeed(v);
+      if (ctx.measureText(st).width <= L.barW - 2) {
+        ctx.fillStyle = sell ? C.text2 : '#0d1a10';
+        ctx.fillText(st, x, bh >= 14 ? y + 7 : y - 7);
+      }
+    }
+    ctx.textAlign = 'left'; ctx.fillStyle = '#7d8294'; ctx.font = `10px ${SANS}`;
+    ctx.fillText(`Speed of Tape (${SPEED_WINDOW_MS / 1000}s)`, L.plotX + 4, spdY0 + 5);
+    ctx.restore();
+  }
+
   // candles / profile / footprint
   const lastI = count - 1, lastP = bb.c[lastI];
   const lastSide = S.pos > 0 ? S.data.side[S.pos - 1] : 0;
@@ -646,6 +733,12 @@ function draw() {
   ctx.save(); ctx.beginPath(); ctx.rect(0, L.priceTop, L.plotX + L.plotW, L.priceBottom - L.priceTop); ctx.clip();
   for (let i = lo; i <= hi; i++) {
     const cx = barX(i), o = bb.o[i], c = bb.c[i];
+    if (bb.nt[i] === 0) {                       // empty interval: a short grey dash at the previous close
+      const w = Math.max(2, Math.floor(L.barW * 0.4)), y = Math.round(py(c)) + 0.5;
+      ctx.strokeStyle = '#4a4f60'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(cx - w / 2, y); ctx.lineTo(cx + w / 2, y); ctx.stroke();
+      continue;
+    }
     const col = fpMode === 0 ? (c > o ? C.up : c < o ? C.down : C.flat)
                              : (c > o ? C.buy : c < o ? C.sell : C.flat);       // footprint candles: green up / purple down
     if (fpMode === 0) {
@@ -706,6 +799,15 @@ function draw() {
   for (const [v, y] of labels) ctx.fillText(v.toFixed(2), L.plotX + L.plotW + 6, y);
   tag(lastP.toFixed(2), L.plotX + L.plotW, lastY, lastSide >= 0 ? '#2a9d46' : '#7e45c2', '#fff');
   if (chPrice != null) tag(chPrice.toFixed(2), L.plotX + L.plotW, py(chPrice), '#4a4f60', '#fff');
+  if (S.spd) {                                   // speed-of-tape scale: pane top, the threshold, and the live value
+    ctx.fillStyle = C.text; ctx.textAlign = 'left';
+    ctx.fillText(fmtSpeed(spdTopV), L.plotX + L.plotW + 6, spdY0 + 6);
+    ctx.fillText(String(S.spdMin), L.plotX + L.plotW + 6, sy(S.spdMin));
+    // live value = speed inside the newest bar (0 once the clock has moved into an interval with no prints yet)
+    const kLive = bb.fill > 0 ? bb.nb : (!bb.timeMode && bb.nb > 0 ? bb.nb - 1 : -1);
+    const live = S.pos > 0 && kLive >= 0 && bb.i1[kLive] === S.pos - 1 ? bb.speedAt(S.pos - 1, kLive) : 0;
+    tag(String(live), L.plotX + L.plotW, Math.max(spdY0 + 8, sy(live)), live > S.spdMin ? '#2a9d46' : '#4a4f60', '#fff');
+  }
   // time axis
   ctx.textAlign = 'center'; ctx.fillStyle = C.text;
   for (const [i, x] of tl) ctx.fillText(fmtHMS(bb.t0[i]), x, cssH - L.axisH / 2);
@@ -729,7 +831,7 @@ function draw() {
   seg(`O ${bb.o[k].toFixed(2)}  H ${bb.h[k].toFixed(2)}  L ${bb.l[k].toFixed(2)}  C ${bb.c[k].toFixed(2)}  `, cc);
   seg(`(${chg >= 0 ? '+' : ''}${chg.toFixed(2)})`, cc);
   x = 8; y = 29;
-  seg(`Vol ${bb.v[k]}  Prints ${bb.nt[k]}   Bid ${bb.bv[k]}  Ask ${bb.av[k]}   `, C.text);
+  seg(`Vol ${bb.v[k]}  Prints ${bb.nt[k]}  Peak ${bb.sp[k]}/s   Bid ${bb.bv[k]}  Ask ${bb.av[k]}   `, C.text);
   seg(`Delta ${delta >= 0 ? '+' : ''}${delta}`, delta >= 0 ? C.buy : C.sell);
   if (hoverRow) seg(`     @ ${hoverRow.price.toFixed(2)}  bid ${hoverRow.bid} x ask ${hoverRow.ask}  (vol ${hoverRow.tot}${hoverRow.poc ? ', POC' : ''})`, C.poc);
   ctx.font = `11px ${SANS}`;
@@ -821,15 +923,24 @@ function tag(txt, xRight, y, bg, fg, centered) {
 
 // ---------- interaction ----------
 // The price scale is the strip on the right of the plot (labels 6135.00 etc).
-function onSplitter(m) { return !!m && m.y >= L.volTop - 8 && m.y <= L.volTop + 2; }
+const fmtSpeed = v => v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'K' : String(v);
+// Which pane divider is under the mouse: 'vol' (above the volume pane), 'spd' (above the speed pane) or null.
+function onSplitter(m) {
+  if (!m) return null;
+  if (m.y >= L.volTop - 8 && m.y <= L.volTop + 2) return 'vol';
+  if (S.spd && m.y >= L.spdTop - 8 && m.y <= L.spdTop + 2) return 'spd';
+  return null;
+}
 function onPriceScale(m) { return m && m.x > L.plotX + L.plotW && m.y >= L.priceTop && m.y <= L.priceBottom; }
 function priceAt(y) { return L.pmax - (y - L.priceTop) / (L.priceBottom - L.priceTop) * (L.pmax - L.pmin); }
 cv.addEventListener('mousemove', e => {
   const r = cv.getBoundingClientRect(); S.mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
   if (!S.drag && !S.axisDrag) cv.style.cursor = (S.splitDrag || onSplitter(S.mouse)) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair';
-  if (S.splitDrag) {                           // drag the divider: resize the volume pane
+  if (S.splitDrag === 'vol') {                 // drag a divider: resize the pane below it
     const h = (cssH - L.axisH) - (S.mouse.y + 3);
     S.volFrac = Math.max(36 / L.availH, Math.min(0.7, h / L.availH));
+  } else if (S.splitDrag === 'spd') {
+    S.spdPx = Math.max(36, Math.min(Math.floor(L.availH * 0.4), L.volTop - (S.mouse.y + 3)));
   } else if (S.axisDrag) {                            // drag on the price scale: pan vertically
     const ppp = (L.pmax - L.pmin) / (L.priceBottom - L.priceTop);
     if (S.ySpan == null) S.ySpan = L.pmax - L.pmin;
@@ -850,14 +961,15 @@ cv.addEventListener('mouseleave', () => { S.mouse = null; cv.style.cursor = 'cro
 cv.addEventListener('mousedown', e => {
   const r = cv.getBoundingClientRect();
   const mm = { x: e.clientX - r.left, y: e.clientY - r.top };
-  if (onSplitter(mm)) { S.splitDrag = true; cv.style.cursor = 'row-resize'; return; }
+  const sp_ = onSplitter(mm);
+  if (sp_) { S.splitDrag = sp_; cv.style.cursor = 'row-resize'; return; }
   if (onPriceScale(mm)) { S.axisDrag = { y: mm.y, yOff: S.yOff }; cv.style.cursor = 'ns-resize'; return; }
   S.drag = { x: mm.x, y: mm.y, viewEnd: S.viewEnd, yOff: S.yOff, span0: L.pmax - L.pmin,
              ppp: (L.pmax - L.pmin) / (L.priceBottom - L.priceTop), xMoved: false, yMoved: false };
   cv.style.cursor = 'grabbing';
 });
 window.addEventListener('mouseup', () => {
-  S.drag = null; S.axisDrag = null; S.splitDrag = false;
+  S.drag = null; S.axisDrag = null; S.splitDrag = null;
   cv.style.cursor = onSplitter(S.mouse) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair'; render();
 });
 cv.addEventListener('wheel', e => {
@@ -882,7 +994,8 @@ cv.addEventListener('wheel', e => {
   S.vis = nv; render();
 }, { passive: false });
 cv.addEventListener('dblclick', () => {
-  if (onSplitter(S.mouse)) { S.volFrac = 0.18; render(); return; }          // double-click the divider: default height
+  const dv_ = onSplitter(S.mouse);                                            // double-click a divider: default height
+  if (dv_) { if (dv_ === 'vol') S.volFrac = 0.18; else S.spdPx = SPD_PX; render(); return; }
   if (onPriceScale(S.mouse)) { S.ySpan = null; S.yOff = 0; render(); return; }      // double-click the scale: auto-fit again
   S.follow = true; updateFollowBtn(); render();
 });
@@ -893,6 +1006,7 @@ function setFootprint(on) {
   if (!on && S.vis < 40) S.vis = CANDLE_VIS;
   render();
 }
+function setSpeedPane(on) { S.spd = on; $('spdbtn').classList.toggle('on', on); render(); }
 function setTape(on) { S.tape = on; $('tape').classList.toggle('hide', !on); $('tapebtn').classList.toggle('on', on); lastTapeKey = ''; }
 function syncUnitControls() {
   const time = $('unit').value === 'time';
@@ -907,6 +1021,9 @@ $('tostart').onclick = () => { setPlaying(false); seek(0); };
 $('follow').onclick = () => { S.follow = !S.follow; updateFollowBtn(); render(); };
 $('fp').onclick = () => setFootprint(!S.fp);
 $('tapebtn').onclick = () => setTape(!S.tape);
+$('spdbtn').onclick = () => setSpeedPane(!S.spd);
+function setSpeedMin(v) { if (Number.isFinite(v) && v >= 0) { S.spdMin = v; $('spdmin').value = v; render(); } }
+$('spdmin').addEventListener('input', e => { const v = parseInt(e.target.value, 10); if (Number.isFinite(v) && v >= 0) { S.spdMin = v; render(); } });
 $('go').onclick = goTime;
 $('gotime').addEventListener('keydown', e => { if (e.key === 'Enter') goTime(); });
 function goTime() {
@@ -940,6 +1057,7 @@ window.addEventListener('keydown', e => {
   else if (e.key === 'End') { S.follow = true; updateFollowBtn(); render(); }
   else if (e.key === 'f' || e.key === 'F') setFootprint(!S.fp);
   else if (e.key === 't' || e.key === 'T') setTape(!S.tape);
+  else if (e.key === 's' || e.key === 'S') setSpeedPane(!S.spd);
 });
 window.addEventListener('resize', resize);
 new ResizeObserver(resize).observe(cv);
@@ -1045,6 +1163,8 @@ async function autoLoad() {
   if (q.get('t')) $('gotime').value = q.get('t');
   if (q.get('fp') === '0') setFootprint(false);
   if (q.get('tape') === '0') setTape(false);
+  if (q.get('spd') === '0') setSpeedPane(false);
+  if (q.get('spdmin') != null) setSpeedMin(parseInt(q.get('spdmin'), 10));
   if (q.get('vis')) S.vis = Math.max(4, +q.get('vis') || S.vis);
   if (q.get('mode') === 'rt' || q.get('mode') === 'rate') { $('mode').value = q.get('mode'); fillSpeeds(); }
   if (q.get('speed')) { $('speed').value = q.get('speed'); if ($('speed').value !== q.get('speed')) {
