@@ -25,7 +25,17 @@
   #fileinfo { color: #8b8f9a; margin-left: auto; white-space: nowrap; }
   #scrubrow { display: flex; align-items: center; gap: 10px; padding: 4px 10px;
               background: #1e222d; border-bottom: 1px solid #2a2e39; }
-  #scrub { flex: 1; accent-color: #2962ff; }
+  /* The slider has an explicit 16 px thumb so the reversal ticks drawn on #revstrip line up with its value. */
+  #scrubwrap { flex: 1; position: relative; height: 30px; }
+  #scrub { -webkit-appearance: none; appearance: none; width: 100%; height: 30px; margin: 0; background: transparent; }
+  #scrub::-webkit-slider-runnable-track { height: 6px; background: #2a2e39; border-radius: 3px; }
+  #scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -5px;
+                                 border-radius: 50%; background: #2962ff; border: none; }
+  #scrub::-moz-range-track { height: 6px; background: #2a2e39; border-radius: 3px; }
+  #scrub::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #2962ff; border: none; }
+  #revstrip { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; cursor: default; }
+  #revtip { position: absolute; top: 32px; z-index: 5; display: none; pointer-events: none; white-space: nowrap;
+            background: #2a2e39; border: 1px solid #3a3f4d; border-radius: 4px; padding: 3px 8px; font-size: 12px; }
   #scrubtime { min-width: 190px; text-align: right; font-variant-numeric: tabular-nums; }
   #chartwrap { flex: 1; display: flex; min-height: 0; }
   #chartbox { flex: 1; position: relative; min-width: 0; }
@@ -93,6 +103,11 @@
     <label for="spdmin" title="A candle gets a speed-of-tape bar only when its peak is above this many prints per second">&gt;</label>
     <input id="spdmin" type="number" min="0" max="10000" value="100" step="10" style="width:62px"
            title="Speed-of-tape threshold (prints / s)">
+    <button id="revbtn" class="on" title="Reversal ticks on the replay slider (R): red = a high price later dropped from, green = a low price later bounced up from">Reversal</button>
+    <label for="revticks" title="Price must move at least this many ticks (1 tick = 0.25) away from the high / low">&ge;</label>
+    <input id="revticks" type="number" min="1" max="10000" value="40" step="1" style="width:62px"
+           title="Reversal size in ticks (1 tick = 0.25 points)">
+    <span id="revinfo" style="color:#8b8f9a"></span>
   </div>
   <div class="grp">
     <button id="open">Open .data...</button>
@@ -101,7 +116,11 @@
   <div id="fileinfo"></div>
 </div>
 <div id="scrubrow">
-  <input id="scrub" type="range" min="0" max="0" value="0" step="1">
+  <div id="scrubwrap">
+    <input id="scrub" type="range" min="0" max="0" value="0" step="1">
+    <canvas id="revstrip"></canvas>
+    <div id="revtip"></div>
+  </div>
   <div id="scrubtime">-</div>
 </div>
 <div id="chartwrap">
@@ -363,6 +382,34 @@ function niceStep(raw) {
   for (const m of [1, 2, 2.5, 5, 10]) if (m * mag >= raw) return m * mag;
   return 10 * mag;
 }
+
+// Reversal points, found in hindsight over the whole file when it is loaded.
+// A reversal point is the extreme (high or low) of a swing from which price then moved at least `minTicks`
+// price ticks (1 tick = TICK_SIZE) the other way.  Prices are compared as integer tick counts.
+//   ext[r]   print index of the extreme = the reversal point, where the market turned (first print if the price repeats)
+//   conf[r]  print index where the move away from it first reached minTicks (kept for the tooltip)
+//   dir[r]   +1 = a low that price bounced up from (green), -1 = a high that price dropped from (red)
+// One pass: follow the current leg's extreme; once price retraces minTicks from it, that extreme is a reversal
+// point and the opposite leg starts.  Reversals alternate low/high and ext, conf increase with r.
+// The very first extreme of the file is not reported (nothing precedes it, so it is not a reversal).
+function findReversals(data, minTicks) {
+  const n = data.n, T = Math.max(1, Math.floor(minTicks)), ts = TICK_SIZE;
+  const ext = [], conf = [], dir = [];
+  let d = 0, hi = 0, hiI = 0, lo = 0, loI = 0;           // d: +1 up-leg (tracks high), -1 down-leg (tracks low), 0 undecided
+  for (let i = 0; i < n; i++) {
+    const pt = Math.round(data.p[i] / ts);
+    if (i === 0) { hi = lo = pt; hiI = loI = 0; }
+    if (d >= 0 && pt > hi) { hi = pt; hiI = i; }
+    if (d <= 0 && pt < lo) { lo = pt; loI = i; }
+    if (d === 0) {
+      if (hi - pt >= T) { d = -1; lo = pt; loI = i; }
+      else if (pt - lo >= T) { d = 1; hi = pt; hiI = i; }
+    } else if (d > 0) {
+      if (hi - pt >= T) { ext.push(hiI); conf.push(i); dir.push(-1); d = -1; lo = pt; loI = i; }
+    } else if (pt - lo >= T) { ext.push(loI); conf.push(i); dir.push(1); d = 1; hi = pt; hiI = i; }
+  }
+  return { minTicks: T, n: ext.length, ext: Int32Array.from(ext), conf: Int32Array.from(conf), dir: Int8Array.from(dir) };
+}
 // ==== CORE END ====
 
 if (typeof document !== 'undefined') (function ui() {
@@ -401,6 +448,8 @@ const S = {
   spd: true, spdPx: SPD_PX,                  // speed-of-tape pane (between price and volume): on/off, height in px
   spdMin: SPEED_MIN,                         // speed-of-tape threshold: only candles whose peak is above it get a bar
   ySpan: null, yOff: 0, axisDrag: null,      // manual price-scale zoom (ySpan = visible points; null = auto-fit)
+  rev: null, revOn: true, revTicks: 40,      // reversal points on the slider: findReversals() result, on/off, size in ticks
+  measure: null,                             // shift + drag ruler: { p0 start price, idx0 start bar position, last mouse pos }
 };
 
 // ---------- speed select ----------
@@ -426,7 +475,9 @@ function setData(buf, name) {
   if (!data.sorted) warn += ' | WARNING: timestamps not sorted';
   if (y < 2000 || y > 2100) warn += ` | WARNING: odd year ${y}, file layout may differ`;
   S.data = data; S.name = name; lastTapeKey = '';
+  S.rev = findReversals(data, S.revTicks);
   $('scrub').max = data.n;
+  drawRevStrip();
   $('fileinfo').textContent = `${name} | ${data.n.toLocaleString()} prints | ${fmtFull(data.t[0])} -> ${fmtFull(data.t[data.n - 1])} ET${warn}`;
   document.title = `${name} - ES Tick Candles`;
   hideMsg();
@@ -438,6 +489,57 @@ function setData(buf, name) {
   if (+q.get('rec') > 0) requestAnimationFrame(() => requestAnimationFrame(() => startRecording(+q.get('rec'))));
   else if (q.get('play') === '1') setPlaying(true);
 }
+
+// ---------- reversal points on the replay slider ----------
+// Every reversal in the file is drawn up front, so you can see where the turns are before replaying to them:
+// red tick above the track = a high price later dropped from, green tick below = a low price later bounced up from.
+// A tick sits at the slider value (extreme print + 1) that reveals the reversal point's print.
+const THUMB_W = 16;                            // must match #scrub::-webkit-slider-thumb / -moz-range-thumb
+const REV_UP = '#2ee86a', REV_DN = '#ff4d4d';
+const revStrip = $('revstrip'), rctx = revStrip.getContext('2d');
+function revX(r, w) { return THUMB_W / 2 + (w - THUMB_W) * (S.rev.ext[r] + 1) / S.data.n; }
+function drawRevStrip() {
+  const box = $('scrubwrap').getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const w = box.width, h = box.height;
+  revStrip.width = Math.max(1, Math.round(w * dpr)); revStrip.height = Math.max(1, Math.round(h * dpr));
+  rctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  rctx.clearRect(0, 0, w, h);
+  $('revinfo').textContent = S.rev ? `${S.rev.n} reversal${S.rev.n === 1 ? '' : 's'}` : '';
+  if (!S.revOn || !S.rev || !S.data || w <= THUMB_W) return;
+  const rv = S.rev, mid = h / 2, tick = 2;
+  for (let r = 0; r < rv.n; r++) {
+    const x = Math.round(revX(r, w)) - tick / 2, up = rv.dir[r] > 0;
+    rctx.fillStyle = up ? REV_UP : REV_DN;
+    if (up) rctx.fillRect(x, mid + 7, tick, h - mid - 8);      // low: below the track
+    else rctx.fillRect(x, 1, tick, mid - 8);                   // high: above the track
+  }
+}
+// Hover a tick to see what it is.
+$('scrubwrap').addEventListener('mousemove', e => {
+  const tip = $('revtip'), rv = S.rev;
+  if (!S.revOn || !rv || !S.data || !rv.n) { tip.style.display = 'none'; return; }
+  const box = $('scrubwrap').getBoundingClientRect(), mx = e.clientX - box.left;
+  let best = -1, bd = 6;
+  for (let r = 0; r < rv.n; r++) { const dx = Math.abs(revX(r, box.width) - mx); if (dx < bd) { bd = dx; best = r; } }
+  if (best < 0) { tip.style.display = 'none'; return; }
+  const d = S.data, ei = rv.ext[best], ci = rv.conf[best], up = rv.dir[best] > 0;
+  const mv = Math.abs(d.p[ci] - d.p[ei]);
+  tip.innerHTML = `<b style="color:${up ? REV_UP : REV_DN}">${up ? 'Low' : 'High'} ${d.p[ei].toFixed(2)}</b> at ${fmtHMS(d.t[ei])}.${pad(d.t[ei] % 1000, 3)} ET` +
+    ` &rarr; ${up ? 'up' : 'down'} ${(mv / TICK_SIZE).toFixed(0)} ticks (${mv.toFixed(2)}) by ${fmtHMS(d.t[ci])}`;
+  tip.style.display = 'block';
+  tip.style.left = Math.max(0, Math.min(box.width - tip.offsetWidth, revX(best, box.width) - tip.offsetWidth / 2)) + 'px';
+});
+$('scrubwrap').addEventListener('mouseleave', () => { $('revtip').style.display = 'none'; });
+function setReversal(on) { S.revOn = on; $('revbtn').classList.toggle('on', on); drawRevStrip(); }
+$('revbtn').onclick = () => setReversal(!S.revOn);
+$('revticks').addEventListener('input', e => {
+  const v = parseInt(e.target.value, 10);
+  if (!Number.isFinite(v) || v < 1) return;
+  S.revTicks = v;
+  if (S.data) S.rev = findReversals(S.data, v);            // one pass over the file, so it is instant
+  drawRevStrip();
+});
+new ResizeObserver(drawRevStrip).observe($('scrubwrap'));
 
 function barSpec() {
   const unit = $('unit').value;
@@ -788,6 +890,42 @@ function draw() {
     const idx = Math.floor(L.first + (m.x - L.plotX) / L.barW);
     if (idx >= 0 && idx < count) hover = idx;
   }
+
+  // Measure ruler (shift + drag): box from the start point to the cursor, labelled with the price distance in ticks.
+  // The start stays on its price / bar as the chart moves; the end follows the cursor, snapped to the 0.25 tick grid.
+  if (S.measure) {
+    const M = S.measure, e1 = S.mouse || M.last;
+    const x0 = L.plotX + (M.idx0 - L.first) * L.barW, y0 = py(M.p0), x1 = e1.x;
+    const p1 = Math.round((pmax - (e1.y - L.priceTop) / (L.priceBottom - L.priceTop) * (pmax - pmin)) / ts) * ts;
+    const y1 = py(p1), tk = Math.round((p1 - M.p0) / ts);
+    const col = tk > 0 ? C.up : tk < 0 ? C.down : C.flat;
+    ctx.save(); ctx.beginPath(); ctx.rect(0, L.priceTop, L.plotX + L.plotW, L.priceBottom - L.priceTop); ctx.clip();
+    const bx = Math.min(x0, x1), by = Math.min(y0, y1), bw = Math.abs(x1 - x0), bh = Math.abs(y1 - y0);
+    ctx.fillStyle = tk > 0 ? 'rgba(38,166,154,.18)' : tk < 0 ? 'rgba(239,83,80,.18)' : 'rgba(139,143,154,.18)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash([]);
+    ctx.strokeRect(Math.round(bx) + 0.5, Math.round(by) + 0.5, Math.round(bw), Math.round(bh));
+    if (bh > 8) {                                              // vertical arrow from the start price to the end price
+      const ax = Math.round((x0 + x1) / 2) + 0.5, dy = y1 > y0 ? 1 : -1;
+      ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(ax, y0); ctx.lineTo(ax, y1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(ax, y1); ctx.lineTo(ax - 4, y1 - 7 * dy); ctx.lineTo(ax + 4, y1 - 7 * dy); ctx.closePath(); ctx.fill();
+    }
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x0, y0, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    // label: ticks, points, bars and elapsed time between the two ends
+    const idx1 = L.first + (x1 - L.plotX) / L.barW;
+    const k0 = Math.max(0, Math.min(count - 1, Math.floor(M.idx0))), k1 = Math.max(0, Math.min(count - 1, Math.floor(idx1)));
+    const secs = Math.abs(bb.t0[k1] - bb.t0[k0]) / 1000, nBars = Math.abs(Math.floor(idx1) - Math.floor(M.idx0));
+    const dur = secs >= 60 ? `${Math.floor(secs / 60)}m ${pad(Math.floor(secs % 60))}s` : `${secs.toFixed(secs < 10 ? 1 : 0)}s`;
+    const txt = `${tk > 0 ? '+' : ''}${tk} ticks  (${tk > 0 ? '+' : ''}${(tk * ts).toFixed(2)})  |  ${nBars} bars  |  ${dur}`;
+    ctx.save(); ctx.font = `bold 12px ${SANS}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(txt).width + 14, th = 20;
+    const lx = Math.max(L.plotX + tw / 2, Math.min(L.plotX + L.plotW - tw / 2, (x0 + x1) / 2));
+    const ly = Math.max(L.priceTop + th / 2 + 2, Math.min(L.priceBottom - th / 2 - 2, tk > 0 ? by - th / 2 - 6 : by + bh + th / 2 + 6));
+    ctx.fillStyle = col; ctx.fillRect(Math.round(lx - tw / 2), Math.round(ly - th / 2), Math.round(tw), th);
+    ctx.fillStyle = '#0b0e14'; ctx.fillText(txt, lx, ly + 0.5);
+    ctx.restore();
+  }
   ctx.restore();
   if (hover >= 0 && fpMode >= 1 && chPrice != null) {
     const fp = bb.footprint(hover), lvl = Math.round(chPrice / ts), j = lvl - fp.lo;
@@ -935,6 +1073,7 @@ function onPriceScale(m) { return m && m.x > L.plotX + L.plotW && m.y >= L.price
 function priceAt(y) { return L.pmax - (y - L.priceTop) / (L.priceBottom - L.priceTop) * (L.pmax - L.pmin); }
 cv.addEventListener('mousemove', e => {
   const r = cv.getBoundingClientRect(); S.mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
+  if (S.measure) S.measure.last = S.mouse;
   if (!S.drag && !S.axisDrag) cv.style.cursor = (S.splitDrag || onSplitter(S.mouse)) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair';
   if (S.splitDrag === 'vol') {                 // drag a divider: resize the pane below it
     const h = (cssH - L.axisH) - (S.mouse.y + 3);
@@ -964,12 +1103,19 @@ cv.addEventListener('mousedown', e => {
   const sp_ = onSplitter(mm);
   if (sp_) { S.splitDrag = sp_; cv.style.cursor = 'row-resize'; return; }
   if (onPriceScale(mm)) { S.axisDrag = { y: mm.y, yOff: S.yOff }; cv.style.cursor = 'ns-resize'; return; }
+  // Shift + left drag in the price pane: measure ticks from the starting point (instead of panning).
+  if (e.shiftKey && e.button === 0 && S.bb && Number.isFinite(L.pmax) && mm.x >= L.plotX && mm.x <= L.plotX + L.plotW &&
+      mm.y >= L.priceTop && mm.y <= L.priceBottom) {
+    e.preventDefault();                                       // no text selection while dragging
+    S.measure = { p0: Math.round(priceAt(mm.y) / TICK_SIZE) * TICK_SIZE, idx0: L.first + (mm.x - L.plotX) / L.barW, last: mm };
+    render(); return;
+  }
   S.drag = { x: mm.x, y: mm.y, viewEnd: S.viewEnd, yOff: S.yOff, span0: L.pmax - L.pmin,
              ppp: (L.pmax - L.pmin) / (L.priceBottom - L.priceTop), xMoved: false, yMoved: false };
   cv.style.cursor = 'grabbing';
 });
 window.addEventListener('mouseup', () => {
-  S.drag = null; S.axisDrag = null; S.splitDrag = null;
+  S.drag = null; S.axisDrag = null; S.splitDrag = null; S.measure = null;
   cv.style.cursor = onSplitter(S.mouse) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair'; render();
 });
 cv.addEventListener('wheel', e => {
@@ -1058,6 +1204,7 @@ window.addEventListener('keydown', e => {
   else if (e.key === 'f' || e.key === 'F') setFootprint(!S.fp);
   else if (e.key === 't' || e.key === 'T') setTape(!S.tape);
   else if (e.key === 's' || e.key === 'S') setSpeedPane(!S.spd);
+  else if (e.key === 'r' || e.key === 'R') setReversal(!S.revOn);
 });
 window.addEventListener('resize', resize);
 new ResizeObserver(resize).observe(cv);
