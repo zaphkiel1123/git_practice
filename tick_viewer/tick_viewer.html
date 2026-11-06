@@ -1264,6 +1264,36 @@ $('unit').addEventListener('change', onBarChange);
 $('ivl').addEventListener('change', onBarChange);
 $('scrub').addEventListener('input', e => { S.scrubbing = true; seek(+e.target.value); });
 $('scrub').addEventListener('change', () => { S.scrubbing = false; });
+
+// Mouse wheel over the slider: scroll down = forward one candle (like the "bar >>" button), scroll up = back one
+// candle (the newest candle is dropped, i.e. rewind to just before its first print).  One wheel notch = one candle;
+// events arriving within the same frame are merged so a fast spin costs one rebuild.
+let wheelAcc = 0, wheelSteps = 0, wheelQueued = false;
+function candleBackTarget(pos, n) {
+  const bb = S.bb;
+  let last = bb.count() - 1, p = pos;
+  for (let s = 0; s < n && p > 0; s++) {
+    while (last >= 0 && bb.i0[last] >= p) last--;
+    if (last < 0) { p = 0; break; }
+    p = bb.i0[last]; last--;
+  }
+  return p;
+}
+function applyWheelSteps() {
+  wheelQueued = false;
+  const n = wheelSteps; wheelSteps = 0;
+  if (!S.data || !S.bb || n === 0) return;
+  if (n > 0) { for (let i = 0; i < n; i++) stepBar(); }          // playback keeps running (stepBar / seek re-sync the clock)
+  else seek(candleBackTarget(S.pos, -n));
+}
+$('scrubwrap').addEventListener('wheel', e => {
+  e.preventDefault();
+  if (!S.data) return;
+  wheelAcc += e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1);
+  if (Math.abs(wheelAcc) < 60) return;                        // trackpads send many small deltas: one step per ~60 px
+  wheelSteps += wheelAcc > 0 ? 1 : -1; wheelAcc = 0;
+  if (!wheelQueued) { wheelQueued = true; requestAnimationFrame(applyWheelSteps); }
+}, { passive: false });
 window.addEventListener('keydown', e => {
   const tag_ = (e.target.tagName || '').toLowerCase();
   if (tag_ === 'input' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
