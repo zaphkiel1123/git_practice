@@ -148,7 +148,8 @@
     <button id="follow" class="on" title="Keep newest bar in view (End)">Follow</button>
     <button id="tapebtn" class="on" title="Time & Sales tape (T)">Tape</button>
     <button id="cvdbtn" class="on" title="CVD pane: cumulative volume delta candles, resets 18:00 ET (C)">CVD</button>
-    <button id="volbtn" class="on" title="Volume pane at the bottom (V)">Volume</button>
+    <button id="volbtn" class="on" title="Volume bar pane at the bottom (V)">Volume</button>
+    <button id="tblbtn" class="on" title="Volume / delta / %delta table under the volume pane (Y)">Vol Table</button>
     <button id="spdbtn" class="on" title="Speed-of-tape pane: peak prints/s per candle (S)">Speed</button>
     <label for="spdmin" title="A candle gets a speed-of-tape bar only when its peak is above this many prints per second">&gt;</label>
     <input id="spdmin" type="number" min="0" max="10000" value="100" step="10" style="width:62px"
@@ -185,6 +186,7 @@
     <button data-tool="select" class="on" title="Select / move / edit drawings (Esc)">Select</button>
     <button data-tool="line" title="Horizontal line: click once; it starts at the click and runs to the right">Line</button>
     <button data-tool="ray" title="Ray: click (or press-drag-release) the start point, then click a second point; it extends beyond it">Ray</button>
+    <button data-tool="vp" title="Volume profile (Shift+V): click the start time, then click the end time (or press-drag-release). Light yellow = volume at each price; the histogram to its left = volume delta (ask - bid). Drag the left / right edge to resize, drag inside to move.">Vol Prof</button>
     <div class="sep"></div>
     <button data-tool="buy" class="buy" title="Buy (long) risk:reward: click for the entry, then drag the TP / SL / entry lines and the right edge">Buy RR</button>
     <button data-tool="sell" class="sell" title="Sell (short) risk:reward: click for the entry, then drag the TP / SL / entry lines and the right edge">Sell RR</button>
@@ -553,6 +555,7 @@ function newState() {
     mouse: null, drag: null,
     volFrac: 0.18, splitDrag: null,            // volume pane height as a fraction of the chart area (drag the divider)
     vol: true,                                 // volume pane on/off
+    tbl: true,                                 // volume / delta / %delta table on/off (independent of the volume pane)
     cvd: true, cvdPx: CVD_PX,                  // CVD pane (between speed of tape and volume): on/off, height in px
     spd: true, spdPx: SPD_PX,                  // speed-of-tape pane (between price and volume): on/off, height in px
     spdMin: SPEED_MIN,                         // speed-of-tape threshold: only candles whose peak is above it get a bar
@@ -853,7 +856,7 @@ function render() {
 function geom() {
   L.axisW = 70; L.axisH = 22; L.padT = 42; L.padL = 6;
   L.plotX = L.padL; L.plotW = Math.max(10, cssW - L.axisW - L.padL);
-  L.tblH = S.vol ? TBL_ROW * 3 : 0;               // volume / delta / %delta table, right below the volume pane
+  L.tblH = S.tbl ? TBL_ROW * 3 : 0;               // volume / delta / %delta table, right below the volume pane
   L.tblBottom = cssH - L.axisH;
   const avail = cssH - L.axisH - L.tblH - L.padT;
   L.availH = avail;
@@ -999,7 +1002,7 @@ function draw() {
   // side that dominated the bar (light green = more bought at the ask, light purple = more sold at the bid).  |%delta| > 15: the %delta value is drawn
   // 2 px bigger in yellow on the dark green / dark purple background.  Volume > 1.25 x the average of the previous
   // 5 bars: the volume cell gets the same dark background and its number turns green / purple (imbalance font colours).
-  if (S.vol && L.tblH > 0) {
+  if (S.tbl && L.tblH > 0) {
     const ty0 = L.volBottom;
     ctx.strokeStyle = C.axis; ctx.lineWidth = 1; ctx.beginPath();
     for (let r = 0; r <= 3; r++) { const yy = Math.round(ty0 + r * TBL_ROW) + 0.5; ctx.moveTo(0, yy); ctx.lineTo(L.plotX + L.plotW, yy); }
@@ -1222,7 +1225,7 @@ function draw() {
     const liveCvd = bb.cc[lastI];
     tag(fmtSigned(liveCvd), L.plotX + L.plotW, Math.max(cvdY0 + 8, Math.min(cvdY1 - 2, cy(liveCvd))), liveCvd >= 0 ? '#2a9d46' : '#7e45c2', '#fff');
   }
-  if (S.vol && L.tblH > 0) {                     // row names of the volume / delta / %delta table, on the price-axis side
+  if (S.tbl && L.tblH > 0) {                     // row names of the volume / delta / %delta table, on the price-axis side
     ctx.save();
     ctx.textAlign = 'left'; ctx.fillStyle = C.text; ctx.font = `10px ${SANS}`;
     ['volume', 'delta', '%delta'].forEach((nm, r) => ctx.fillText(nm, L.plotX + L.plotW + 6, L.volBottom + r * TBL_ROW + TBL_ROW / 2 + 0.5));
@@ -1492,7 +1495,100 @@ function inPricePane(m) { return m && m.x >= L.plotX && m.x <= L.plotX + L.plotW
 function geomOf(d) {
   if (d.type === 'line') return { x0: xOfT(d.t0), y: pyL(d.p) };
   if (d.type === 'ray') return { x0: xOfT(d.t0), y0: pyL(d.p0), x1: xOfT(d.t1), y1: pyL(d.p1) };
+  if (d.type === 'vp') return { x0: xOfT(d.t0), x1: xOfT(d.t1) };
   return { x0: xOfT(d.t0), x1: xOfT(d.t1), yE: pyL(d.entry), yTP: pyL(d.tp), ySL: pyL(d.sl) };
+}
+// ---------- volume profile drawing ('vp') ----------
+// Fixed-range volume profile between two times.  It is stored as { type:'vp', t0, t1 } (real times), so it is
+// shown at the same place in every window / bar type.  Only prints that have been replayed (index < P.pos) are
+// counted, so it grows live during playback.  Per price level (one tick) it keeps the contracts bought at the ask
+// and sold at the bid; the light-yellow bars (volume = ask + bid) grow to the right from the start time, and the
+// volume delta (ask - bid) of the same level is a horizontal histogram to the left of the start time.
+const VP_WIDTH = 0.30;                                   // the longest (POC) bar uses 30% of the range width
+const VP_FILL = 'rgba(255,245,157,.55)', VP_POC = 'rgba(255,235,59,.90)', VP_LINE = 'rgba(255,245,157,.75)';
+const VP_UP = 'rgba(67,214,95,.80)', VP_DN = 'rgba(150,90,230,.90)';
+// Price-level totals of d, extended incrementally while the replay (or the range) grows; rebuilt when it shrinks.
+function vpData(d) {
+  const D = P.data, ts = TICK_SIZE;
+  const ta = Math.min(d.t0, d.t1), tb = Math.max(d.t0, d.t1);
+  const i0 = lowerBound(D.t, ta, D.n), i1 = Math.max(i0, Math.min(P.pos, lowerBound(D.t, tb + 1, D.n)));   // records [i0, i1)
+  let c = d._vp;
+  if (!c || c.src !== D || c.i0 !== i0 || c.i1 > i1) c = d._vp = { src: D, i0, i1: i0, lo: 0, m: 0, bid: null, ask: null, minL: Infinity, maxL: -Infinity, vol: 0, delta: 0 };
+  for (let r = c.i1; r < i1; r++) {
+    const lvl = Math.round(D.p[r] / ts);
+    if (!c.bid || lvl < c.lo || lvl >= c.lo + c.m) {                  // grow the level arrays (with some slack)
+      const nlo = c.bid ? Math.min(c.lo, lvl - 32) : lvl - 32, nhi = c.bid ? Math.max(c.lo + c.m, lvl + 33) : lvl + 33;
+      const nb = new Float64Array(nhi - nlo), na = new Float64Array(nhi - nlo);
+      if (c.bid) { nb.set(c.bid, c.lo - nlo); na.set(c.ask, c.lo - nlo); }
+      c.bid = nb; c.ask = na; c.lo = nlo; c.m = nhi - nlo;
+    }
+    const j = lvl - c.lo, q = D.q[r];
+    if (D.side[r] > 0) { c.ask[j] += q; c.delta += q; } else { c.bid[j] += q; c.delta -= q; }
+    c.vol += q;
+    if (lvl < c.minL) c.minL = lvl; if (lvl > c.maxL) c.maxL = lvl;
+  }
+  c.i1 = i1;
+  return c;
+}
+// Geometry + scaling of a profile: anchor x (left edge of the range), widths of the volume / delta histograms.
+function vpLayout(d) {
+  const g = geomOf(d), c = vpData(d), xl = Math.min(g.x0, g.x1), xr = Math.max(g.x0, g.x1);
+  const W = Math.max(xr - xl, 60);
+  const lay = { c, g, xl, xr, volLen: W * VP_WIDTH, dLen: W * 0.35, maxTot: 0, maxD: 0, poc: NaN, empty: c.maxL < c.minL };
+  if (!lay.empty) for (let l = c.minL; l <= c.maxL; l++) {
+    const j = l - c.lo, tot = c.ask[j] + c.bid[j], dl = Math.abs(c.ask[j] - c.bid[j]);
+    if (tot > lay.maxTot) { lay.maxTot = tot; lay.poc = l; }
+    if (dl > lay.maxD) lay.maxD = dl;
+  }
+  return lay;
+}
+function vpTop(lay) { return lay.empty ? L.priceTop : pyL((lay.c.maxL + 0.5) * TICK_SIZE); }
+function vpBot(lay) { return lay.empty ? L.priceBottom : pyL((lay.c.minL - 0.5) * TICK_SIZE); }
+function hitVP(d, m) {
+  const lay = vpLayout(d), top = vpTop(lay), bot = vpBot(lay);
+  if (m.y < top - HIT || m.y > bot + HIT) return null;
+  const da = Math.abs(m.x - lay.g.x0), db = Math.abs(m.x - lay.g.x1);
+  if (da <= HIT && da <= db) return 'a';
+  if (db <= HIT) return 'b';
+  if (!lay.empty) {                                                 // grab the histograms themselves (the empty box must not block panning)
+    const l = Math.round(priceAt(m.y) / TICK_SIZE), j = l - lay.c.lo;
+    if (j >= 0 && j < lay.c.m) {
+      const a = lay.c.ask[j], b = lay.c.bid[j];
+      const vx = lay.maxTot ? (a + b) / lay.maxTot * lay.volLen : 0, dx = lay.maxD ? Math.abs(a - b) / lay.maxD * lay.dLen : 0;
+      if (m.x >= lay.xl - dx - 2 && m.x <= lay.xl + vx + 2) return 'move';
+    }
+  }
+  return null;
+}
+function drawVP(d, sel, ghost) {
+  const lay = vpLayout(d), c = lay.c, ts = TICK_SIZE, xl = lay.xl, xr = lay.xr;
+  const right = L.plotX + L.plotW, top = vpTop(lay), bot = vpBot(lay);
+  const rowPx = pyL(0) - pyL(ts), hRow = Math.max(1, rowPx >= 4 ? rowPx - 1 : rowPx);
+  if (!lay.empty) for (let l = c.minL; l <= c.maxL; l++) {
+    const j = l - c.lo, a = c.ask[j], b = c.bid[j], tot = a + b;
+    if (!tot) continue;
+    const y = pyL(l * ts) - hRow / 2;
+    if (y + hRow < L.priceTop || y > L.priceBottom) continue;
+    ctx.fillStyle = l === lay.poc ? VP_POC : VP_FILL;
+    ctx.fillRect(xl, y, Math.max(1, tot / lay.maxTot * lay.volLen), hRow);
+    const dl = a - b;
+    if (dl) {
+      ctx.fillStyle = dl > 0 ? VP_UP : VP_DN;
+      const w = Math.max(1, Math.abs(dl) / lay.maxD * lay.dLen);
+      ctx.fillRect(xl - w, y, w, hRow);
+    }
+  }
+  // range edges + label
+  ctx.strokeStyle = VP_LINE; ctx.lineWidth = sel ? 2 : 1; ctx.setLineDash(ghost ? [5, 4] : [3, 3]);
+  ctx.beginPath();
+  for (const x of [xl, xr]) { const xp = Math.round(x) + 0.5; ctx.moveTo(xp, top - 4); ctx.lineTo(xp, bot + 4); }
+  ctx.stroke(); ctx.setLineDash([]);
+  const ta = Math.min(d.t0, d.t1), tb = Math.max(d.t0, d.t1), sgn = v => (v >= 0 ? '+' : '') + v;
+  const txt = lay.empty ? `VP ${fmtHMS(ta)} - ${fmtHMS(tb)}  (no prints yet)`
+    : `VP ${fmtHMS(ta)} - ${fmtHMS(tb)}   Vol ${c.vol.toLocaleString()}   Delta ${sgn(c.delta)}   POC ${(lay.poc * ts).toFixed(2)}`;
+  const cx = Math.max(L.plotX + 80, Math.min(right - 80, (Math.max(xl, L.plotX) + Math.min(xr, right)) / 2));
+  pill(txt, cx, Math.max(L.priceTop + 10, top - 12), 'rgba(255,245,157,.92)', '#0b0e14');
+  if (sel) { const ym = (Math.max(top, L.priceTop) + Math.min(bot, L.priceBottom)) / 2; handleSq(xl, ym); handleSq(xr, ym); }
 }
 function rayDist(m, g) {
   const dx = g.x1 - g.x0, dy = g.y1 - g.y0, len2 = dx * dx + dy * dy;
@@ -1509,6 +1605,9 @@ function hitDraw(m) {
     if (d.type === 'line') {
       if (Math.hypot(m.x - g.x0, m.y - g.y) <= 8) return { d, part: 'anchor' };
       if (Math.abs(m.y - g.y) <= HIT && m.x >= g.x0 - HIT) return { d, part: 'price' };
+    } else if (d.type === 'vp') {
+      const part = hitVP(d, m);
+      if (part) return { d, part };
     } else if (d.type === 'ray') {
       if (Math.hypot(m.x - g.x0, m.y - g.y0) <= 8) return { d, part: 'a' };
       if (Math.hypot(m.x - g.x1, m.y - g.y1) <= 8) return { d, part: 'b' };
@@ -1568,6 +1667,11 @@ function newRR(kind, m) {
 function commitRay(m) {
   const pd = S.pend, t1 = tOfX(m.x), p1 = snapP(priceAt(m.y));
   S.pend = null;
+  if (pd.kind === 'vp') {                                                // volume profile: only the two times matter
+    if (t1 === pd.t0) { updateToolButtons(); return; }
+    addDraw({ type: 'vp', t0: Math.min(pd.t0, t1), t1: Math.max(pd.t0, t1) });
+    return;
+  }
   if (t1 === pd.t0 && p1 === pd.p0) { updateToolButtons(); return; }     // zero length: cancel
   addDraw({ type: 'ray', t0: pd.t0, p0: pd.p0, t1, p1 });
 }
@@ -1576,6 +1680,7 @@ function drawMouseDown(mm) {
   if (!drawReady() || !inPricePane(mm)) return false;
   if (S.pend) { if (!S.pend.down) commitRay(mm); return true; }          // second click of a ray
   if (S.tool === 'line') { addDraw({ type: 'line', t0: tOfX(mm.x), p: snapP(priceAt(mm.y)) }); return true; }
+  if (S.tool === 'vp') { S.pend = { kind: 'vp', t0: tOfX(mm.x), ax: mm.x, ay: mm.y, down: true }; return true; }
   if (S.tool === 'ray') { S.pend = { t0: tOfX(mm.x), p0: snapP(priceAt(mm.y)), ax: mm.x, ay: mm.y, down: true }; return true; }
   if (S.tool === 'buy' || S.tool === 'sell') { addDraw(newRR(S.tool, mm)); return true; }
   const h = hitDraw(mm);
@@ -1596,7 +1701,11 @@ function dragDraw(m) {
   const dPos = (m.x - D.m0.x) / L.barW;
   const dP = Math.round((priceAt(m.y) - priceAt(D.m0.y)) / ts) * ts;
   const shiftT = t => timeOfPos(posOfTime(t) + dPos), pAbs = snapP(priceAt(m.y));
-  if (d.type === 'line') {
+  if (d.type === 'vp') {
+    if (D.part === 'a') d.t0 = tOfX(m.x);
+    else if (D.part === 'b') d.t1 = tOfX(m.x);
+    else { d.t0 = shiftT(o.t0); d.t1 = shiftT(o.t1); }
+  } else if (d.type === 'line') {
     if (D.part === 'anchor') d.t0 = shiftT(o.t0);
     d.p = o.p + dP;
   } else if (d.type === 'ray') {
@@ -1711,7 +1820,8 @@ function drawDrawings() {
   ctx.save(); ctx.beginPath(); ctx.rect(L.plotX, L.priceTop, L.plotW, L.priceBottom - L.priceTop); ctx.clip();
   for (const d of P.draws) {
     const sel = d === S.sel, g = geomOf(d);
-    if (d.type === 'line') {
+    if (d.type === 'vp') drawVP(d, sel, false);
+    else if (d.type === 'line') {
       hseg(Math.max(g.x0, L.plotX), right, g.y, colOf(d), lwOf(d) + (sel ? 0.5 : 0));
       if (sel) handleDot(g.x0, g.y);
     } else if (d.type === 'ray') {
@@ -1726,7 +1836,14 @@ function drawDrawings() {
   const m = S.mouse;
   if (m && inPricePane(m)) {                                              // placement previews
     ctx.setLineDash([5, 4]); ctx.lineWidth = 1;
-    if (S.pend) {
+    if (S.pend && S.pend.kind === 'vp') {                                 // live preview of the profile while choosing the end time
+      const pv = S.pend.prev || (S.pend.prev = { type: 'vp', t0: S.pend.t0, t1: S.pend.t0 });
+      pv.t0 = S.pend.t0; pv.t1 = tOfX(m.x);
+      drawVP(pv, false, true);
+    } else if (S.tool === 'vp') {
+      ctx.strokeStyle = VP_LINE; const x = Math.round(m.x) + 0.5;
+      ctx.beginPath(); ctx.moveTo(x, L.priceTop); ctx.lineTo(x, L.priceBottom); ctx.stroke();
+    } else if (S.pend) {
       const g = { x0: xOfT(S.pend.t0), y0: pyL(S.pend.p0), x1: m.x, y1: pyL(snapP(priceAt(m.y))) }, e = rayEnd(g);
       ctx.strokeStyle = DRAW_COL.ray;
       ctx.beginPath(); ctx.moveTo(g.x0, g.y0); if (e) ctx.lineTo(e[0], e[1]); ctx.stroke();
@@ -1756,6 +1873,7 @@ function setFootprint(on) {
   render();
 }
 function setVolumePane(on) { S.vol = on; cur.el.vol.classList.toggle('on', on); render(); }
+function setVolTable(on) { S.tbl = on; cur.el.tbl.classList.toggle('on', on); render(); }
 function setCvdPane(on) { S.cvd = on; cur.el.cvd.classList.toggle('on', on); render(); }
 function setSpeedPane(on) { S.spd = on; cur.el.spd.classList.toggle('on', on); render(); }
 function setTape(on) { S.tape = on; $('tape').classList.toggle('hide', !on); $('tapebtn').classList.toggle('on', on); lastTapeKey = ''; }
@@ -1776,6 +1894,7 @@ $('fp').onclick = onMain(() => setFootprint(!S.fp));
 $('tapebtn').onclick = onMain(() => setTape(!S.tape));
 $('spdbtn').onclick = onMain(() => setSpeedPane(!S.spd));
 $('volbtn').onclick = onMain(() => setVolumePane(!S.vol));
+$('tblbtn').onclick = onMain(() => setVolTable(!S.tbl));
 $('cvdbtn').onclick = onMain(() => setCvdPane(!S.cvd));
 // the speed-of-tape threshold is one setting for every window
 function setSpeedMin(v) { if (Number.isFinite(v) && v >= 0) { eachChart(() => { S.spdMin = v; render(); }); $('spdmin').value = v; } }
@@ -1813,7 +1932,9 @@ function onKey(e) {
   else if (e.key === 'f' || e.key === 'F') setFootprint(!S.fp);
   else if (e.key === 't' || e.key === 'T') { use(charts[0]); setTape(!S.tape); }
   else if (e.key === 's' || e.key === 'S') setSpeedPane(!S.spd);
+  else if (e.shiftKey && (e.key === 'v' || e.key === 'V')) setTool('vp');      // Shift+V: volume profile tool (again = back to select)
   else if (e.key === 'v' || e.key === 'V') setVolumePane(!S.vol);
+  else if (e.key === 'y' || e.key === 'Y') setVolTable(!S.tbl);
   else if (e.key === 'c' || e.key === 'C') setCvdPane(!S.cvd);
   else if (e.key === 'r' || e.key === 'R') setReversal(!P.revOn);
   else if (e.key === 'Escape') { closeStyler(); S.pend = null; S.tool = null; S.sel = null; S.dd = null; updateToolButtons(); render(); }
@@ -1895,7 +2016,8 @@ function addWindow() {
     `<select class="w_ivl" title="Candle interval"><option value="1">1s</option><option value="5">5s</option>` +
     `<option value="15">15s</option><option value="60" selected>1min</option><option value="300">5min</option></select>` +
     `<button class="w_fp" title="Footprint + volume profile inside each candle (F)">Footprint</button>` +
-    `<button class="w_vol on" title="Volume pane (V)">Volume</button>` +
+    `<button class="w_vol on" title="Volume bar pane (V)">Volume</button>` +
+    `<button class="w_tbl on" title="Volume / delta / %delta table (Y)">Vol Table</button>` +
     `<button class="w_cvd" title="CVD pane (C)">CVD</button>` +
     `<button class="w_spd" title="Speed-of-tape pane (S)">Speed</button>` +
     `<button class="w_follow on" title="Keep newest bar in view (End)">Follow</button>` +
@@ -1915,13 +2037,14 @@ function addWindow() {
   win.querySelector('.wbody').prepend(tools);
   doc.body.appendChild(win);
   const q = c => win.querySelector('.' + c);
-  const el = { fp: q('w_fp'), vol: q('w_vol'), cvd: q('w_cvd'), spd: q('w_spd'), follow: q('w_follow'),
+  const el = { fp: q('w_fp'), vol: q('w_vol'), tbl: q('w_tbl'), cvd: q('w_cvd'), spd: q('w_spd'), follow: q('w_follow'),
                unit: q('w_unit'), size: q('w_size'), ivl: q('w_ivl'), play: q('w_play'), tools };
   const ch = makeChart(win.querySelector('.chartbox canvas'), el, win, w);
   Object.assign(ch.S, { fp: false, vis: CANDLE_VIS, cvd: false, spd: false, spdMin: charts[0].S.spdMin });
   const run = fn => e => { setActive(ch); use(ch); fn(e); };
   el.fp.onclick = run(() => setFootprint(!S.fp));
   el.vol.onclick = run(() => setVolumePane(!S.vol));
+  el.tbl.onclick = run(() => setVolTable(!S.tbl));
   el.cvd.onclick = run(() => setCvdPane(!S.cvd));
   el.spd.onclick = run(() => setSpeedPane(!S.spd));
   el.follow.onclick = run(() => { S.follow = !S.follow; updateFollowBtn(); render(); });
@@ -2062,6 +2185,7 @@ async function autoLoad() {
   if (q.get('tape') === '0') setTape(false);
   if (q.get('spd') === '0') setSpeedPane(false);
   if (q.get('vol') === '0') setVolumePane(false);
+  if (q.get('tbl') === '0') setVolTable(false);
   if (q.get('cvd') === '0') setCvdPane(false);
   if (q.get('spdmin') != null) setSpeedMin(parseInt(q.get('spdmin'), 10));
   if (q.get('vis')) S.vis = Math.max(4, +q.get('vis') || S.vis);
@@ -2083,7 +2207,7 @@ async function autoLoad() {
 }
 
 try { if (localStorage.getItem('tv_tools_collapsed') === '1') $('tools').classList.add('collapsed'); } catch (e) {}
-makeChart($('cv'), { fp: $('fp'), vol: $('volbtn'), cvd: $('cvdbtn'), spd: $('spdbtn'), follow: $('follow'),
+makeChart($('cv'), { fp: $('fp'), vol: $('volbtn'), tbl: $('tblbtn'), cvd: $('cvdbtn'), spd: $('spdbtn'), follow: $('follow'),
                      unit: $('unit'), size: $('barsize'), ivl: $('ivl'), tools: $('tools') }, $('win0'), window);
 use(charts[0]); setActive(charts[0]);
 fillSpeeds();
