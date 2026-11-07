@@ -42,12 +42,34 @@
   #revtip { position: absolute; top: 32px; z-index: 5; display: none; pointer-events: none; white-space: nowrap;
             background: #2a2e39; border: 1px solid #3a3f4d; border-radius: 4px; padding: 3px 8px; font-size: 12px; }
   #scrubtime { min-width: 190px; text-align: right; font-variant-numeric: tabular-nums; }
-  #chartwrap { flex: 1; display: flex; min-height: 0; }
-  #chartbox { flex: 1; position: relative; min-width: 0; }
-  #tools { width: 58px; flex: none; display: flex; flex-direction: column; gap: 4px; padding: 6px 5px;
+  .scrubrow { display: flex; align-items: center; gap: 10px; padding: 4px 10px;
+              background: #1e222d; border-bottom: 1px solid #2a2e39; }
+    .scrubwrap { flex: 1; position: relative; height: 30px; }
+  .scrub { -webkit-appearance: none; appearance: none; width: 100%; height: 30px; margin: 0; background: transparent; }
+  .scrub::-webkit-slider-runnable-track { height: 6px; background: #2a2e39; border-radius: 3px; }
+  .scrub::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; margin-top: -5px;
+                                 border-radius: 50%; background: #2962ff; border: none; }
+  .scrub::-moz-range-track { height: 6px; background: #2a2e39; border-radius: 3px; }
+  .scrub::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: #2962ff; border: none; }
+  .revstrip { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; cursor: default; }
+  .revtip { position: absolute; top: 32px; z-index: 5; display: none; pointer-events: none; white-space: nowrap;
+            background: #2a2e39; border: 1px solid #3a3f4d; border-radius: 4px; padding: 3px 8px; font-size: 12px; }
+  .scrubtime { min-width: 190px; text-align: right; font-variant-numeric: tabular-nums; }
+  /* chart window layout (the main page, and every "+ window" browser window, uses the same classes) */
+  #wins { flex: 1; display: flex; min-height: 0; min-width: 0; }
+  .win { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .wbody { flex: 1; display: flex; min-height: 0; }
+  .chartbox { flex: 1; position: relative; min-width: 0; }
+  .whead { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding: 3px 8px;
+           background: #1e222d; border-bottom: 1px solid #2a2e39; }
+  .whead .wtitle { color: #d1d4dc; font-weight: 600; margin-right: 4px; }
+  .whead .wnote { color: #5d6270; }
+  .whead button, .whead select, .whead input { padding: 1px 6px; font-size: 12px; }
+  .whead input[type=number] { width: 62px; }
+  .tools { width: 58px; flex: none; display: flex; flex-direction: column; gap: 4px; padding: 6px 5px;
            background: #1e222d; border-right: 1px solid #2a2e39; }
-  #tools .th { color: #5d6270; font-size: 10px; text-align: center; text-transform: uppercase; letter-spacing: .08em; }
-  #tools button { width: 100%; min-width: 0; padding: 5px 2px; font-size: 11px; }
+  .tools .th { color: #5d6270; font-size: 10px; text-align: center; text-transform: uppercase; letter-spacing: .08em; }
+  .tools button { width: 100%; min-width: 0; padding: 5px 2px; font-size: 11px; }
   #styler { position: fixed; z-index: 30; width: 230px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px;
             background: #1e222d; border: 1px solid #3a3f4d; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
   #styler .srow { display: flex; align-items: center; gap: 8px; }
@@ -56,9 +78,13 @@
   #styler input[type=range] { flex: 1; min-width: 0; padding: 0; }
   #styler #st_sw { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
   #styler button.sw { min-width: 0; width: 16px; height: 16px; padding: 0; border-radius: 3px; border: 1px solid #3a3f4d; }
-  #tools .sep { height: 1px; background: #2a2e39; margin: 3px 0; }
-  #tools button.buy.on { background: #26a69a; border-color: #26a69a; }
-  #tools button.sell.on { background: #ef5350; border-color: #ef5350; }
+  .tools .tcollapse { padding: 1px 2px; line-height: 1.2; font-size: 12px; }
+  /* collapsed: the drawing panel shrinks to a thin strip holding only the expand button */
+  .tools.collapsed { width: 26px; padding: 6px 2px; }
+  .tools.collapsed > :not(.tcollapse) { display: none; }
+  .tools .sep { height: 1px; background: #2a2e39; margin: 3px 0; }
+  .tools button.buy.on { background: #26a69a; border-color: #26a69a; }
+  .tools button.sell.on { background: #ef5350; border-color: #ef5350; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
   #tape { width: 210px; border-left: 1px solid #2a2e39; background: #171b26; display: flex; flex-direction: column;
           font: 11px/15px ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace; }
@@ -96,6 +122,7 @@
       <option value="5">5s</option>
       <option value="15">15s</option>
       <option value="60">1min</option>
+      <option value="300">5min</option>
     </select>
     <button id="fp" class="on" title="Footprint + volume profile inside each candle (F)">Footprint</button>
   </div>
@@ -136,6 +163,9 @@
     <button id="open">Open .data...</button>
     <input id="file" type="file" style="display:none">
   </div>
+  <div class="grp">
+    <button id="addwin" title="Open another browser window (move it to another monitor / alt+tab) that follows this page's playback; drawings are shared both ways">+ window</button>
+  </div>
   <div id="fileinfo"></div>
 </div>
 <div id="scrubrow">
@@ -146,8 +176,11 @@
   </div>
   <div id="scrubtime">-</div>
 </div>
-<div id="chartwrap">
-  <div id="tools">
+<div id="wins">
+ <div class="win active" id="win0">
+  <div class="wbody">
+  <div id="tools" class="tools">
+    <button class="tcollapse" title="Collapse / expand the drawing panel (D)">&#171;</button>
     <div class="th">Draw</div>
     <button data-tool="select" class="on" title="Select / move / edit drawings (Esc)">Select</button>
     <button data-tool="line" title="Horizontal line: click once; it starts at the click and runs to the right">Line</button>
@@ -156,15 +189,17 @@
     <button data-tool="buy" class="buy" title="Buy (long) risk:reward: click for the entry, then drag the TP / SL / entry lines and the right edge">Buy RR</button>
     <button data-tool="sell" class="sell" title="Sell (short) risk:reward: click for the entry, then drag the TP / SL / entry lines and the right edge">Sell RR</button>
     <div class="sep"></div>
-    <button id="tl_del" title="Delete the selected drawing (Delete)">Delete</button>
-    <button id="tl_clear" title="Remove all drawings">Clear</button>
+    <button id="tl_del" data-act="del" title="Delete the selected drawing (Delete)">Delete</button>
+    <button id="tl_clear" data-act="clear" title="Remove all drawings (in every window)">Clear</button>
   </div>
-  <div id="chartbox">
+  <div id="chartbox" class="chartbox">
     <canvas id="cv"></canvas>
     <div id="msg"><div id="msgmain">Loading...</div>
       <div id="help">Drop a <code>.data</code> file here or use "Open .data". All times shown are New York (ET).</div></div>
   </div>
   <div id="tape"><div id="tapehead">Time &amp; Sales (ET)</div><div id="tapebody"></div></div>
+  </div>
+ </div>
 </div>
 <div id="styler" style="display:none">
   <div class="srow"><label for="st_col">Colour</label><input id="st_col" type="color" value="#4aa3ff"><div id="st_sw"></div></div>
@@ -473,7 +508,12 @@ if (typeof document !== 'undefined') (function ui() {
 // UI
 // ===================================================================
 const $ = id => document.getElementById(id);
-const cv = $('cv'), ctx = cv.getContext('2d');
+// Chart windows.  The code below draws "the current chart": cv / ctx / S / L / cssW / cssH are swapped by use(ch),
+// so every entry point from outside (mouse, keyboard, resize, animation frame) goes through use() / eachChart().
+let cv, ctx, S, L, cssW = 0, cssH = 0, cur = null;
+const charts = [];                             // charts[0] is the main window
+function use(ch) { cur = ch; cv = ch.cv; ctx = ch.ctx; S = ch.S; L = ch.L; cssW = ch.cssW; cssH = ch.cssH; }
+function eachChart(fn) { const prev = cur; for (const ch of charts.slice()) { use(ch); fn(ch); } if (prev && charts.includes(prev)) use(prev); else use(charts[0]); }
 const C = { bg: '#131722', grid: '#232733', text: '#9aa0ad', axis: '#2a2e39', up: '#26a69a', down: '#ef5350',
             flat: '#8b8f9a', cross: '#6b7080', poc: '#f5c542',
             buy: '#43d65f', sell: '#b47cf5',                  // aggressive buyer (at ask) / seller (at bid)
@@ -497,21 +537,29 @@ const PROFILE_MIN_BAR = 4;                     // narrowest bar (px) that still 
 const SPD_PX = 72;                             // default speed-of-tape pane height
 const CVD_PX = 90;                             // default CVD pane height
 
-const S = {
-  data: null, name: '', bb: null,
-  pos: 0, playing: false, simTime: 0, acc: 0, lastTs: null,
-  follow: true, vis: FP_VIS, viewEnd: 0, fp: true, tape: true,
-  mouse: null, drag: null, scrubbing: false,
-  volFrac: 0.18, splitDrag: null,            // volume pane height as a fraction of the chart area (drag the divider)
-  vol: true,                                 // volume pane on/off
-  cvd: true, cvdPx: CVD_PX,                  // CVD pane (between speed of tape and volume): on/off, height in px
-  spd: true, spdPx: SPD_PX,                  // speed-of-tape pane (between price and volume): on/off, height in px
-  spdMin: SPEED_MIN,                         // speed-of-tape threshold: only candles whose peak is above it get a bar
-  ySpan: null, yOff: 0, axisDrag: null,      // manual price-scale zoom (ySpan = visible points; null = auto-fit)
+// Playback / data / drawings are shared by every window: one clock, one set of drawings.
+const P = {
+  data: null, name: '',
+  pos: 0, playing: false, simTime: 0, acc: 0, lastTs: null, scrubbing: null,
   rev: null, revOn: true, revTicks: 40,      // reversal points on the slider: findReversals() result, on/off, size in ticks
-  measure: null,                             // shift + drag ruler: { p0 start price, idx0 start bar position, last mouse pos }
-  draws: [], tool: null, sel: null, dd: null, pend: null, cumQ: null,   // drawing tools (see "drawing tools" below)
+  draws: [],                                 // drawing tools (see "drawing tools" below); stored as time + price, so any bar type can show them
 };
+// Per-window view state: its own bars (bar type), zoom / pan, panes, tool, selection.
+function newState() {
+  return {
+    bb: null,
+    follow: true, vis: FP_VIS, viewEnd: 0, fp: true, tape: true,
+    mouse: null, drag: null,
+    volFrac: 0.18, splitDrag: null,            // volume pane height as a fraction of the chart area (drag the divider)
+    vol: true,                                 // volume pane on/off
+    cvd: true, cvdPx: CVD_PX,                  // CVD pane (between speed of tape and volume): on/off, height in px
+    spd: true, spdPx: SPD_PX,                  // speed-of-tape pane (between price and volume): on/off, height in px
+    spdMin: SPEED_MIN,                         // speed-of-tape threshold: only candles whose peak is above it get a bar
+    ySpan: null, yOff: 0, axisDrag: null,      // manual price-scale zoom (ySpan = visible points; null = auto-fit)
+    measure: null,                             // shift + drag ruler: { p0 start price, idx0 start bar position, last mouse pos }
+    tool: null, sel: null, dd: null, pend: null, cumQ: null,
+  };
+}
 
 // ---------- speed select ----------
 function fillSpeeds() {
@@ -535,15 +583,15 @@ function setData(buf, name) {
   if (data.trailing) warn += ` | ${data.trailing} trailing bytes ignored`;
   if (!data.sorted) warn += ' | WARNING: timestamps not sorted';
   if (y < 2000 || y > 2100) warn += ` | WARNING: odd year ${y}, file layout may differ`;
-  S.data = data; S.name = name; lastTapeKey = '';
-  S.draws = []; S.sel = null; S.dd = null; S.pend = null; S.cumQ = null;       // drawings belong to the previous file
-  S.rev = findReversals(data, S.revTicks);
-  $('scrub').max = data.n;
+  P.data = data; P.name = name; lastTapeKey = '';
+  P.draws = [];                                                                // drawings belong to the previous file
+  for (const ch of charts) { ch.S.sel = null; ch.S.dd = null; ch.S.pend = null; ch.S.cumQ = null; }
+  P.rev = findReversals(data, P.revTicks);
   drawRevStrip();
   $('fileinfo').textContent = `${name} | ${data.n.toLocaleString()} prints | ${fmtFull(data.t[0])} -> ${fmtFull(data.t[data.n - 1])} ET${warn}`;
   document.title = `${name} - ES Tick Candles`;
   hideMsg();
-  rebuildBars(0);
+  eachChart(() => rebuildBars(0));
   const q = new URLSearchParams(location.search);
   const startTod = parseTod(q.get('t') || $('gotime').value);
   let idx = startTod == null ? -1 : seekIndexForTod(data, startTod);
@@ -558,17 +606,17 @@ function setData(buf, name) {
 // A tick sits at the slider value (extreme print + 1) that reveals the reversal point's print.
 const THUMB_W = 16;                            // must match #scrub::-webkit-slider-thumb / -moz-range-thumb
 const REV_UP = '#2ee86a', REV_DN = '#ff4d4d';
-const revStrip = $('revstrip'), rctx = revStrip.getContext('2d');
-function revX(r, w) { return THUMB_W / 2 + (w - THUMB_W) * (S.rev.ext[r] + 1) / S.data.n; }
-function drawRevStrip() {
-  const box = $('scrubwrap').getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
-  const w = box.width, h = box.height;
-  revStrip.width = Math.max(1, Math.round(w * dpr)); revStrip.height = Math.max(1, Math.round(h * dpr));
+// One replay slider per window: the main page's, and one in every "+ window".  { wrap, canvas, rctx, tip, slider, time, win, chart }
+const scrubs = [];
+function revX(r, w) { return THUMB_W / 2 + (w - THUMB_W) * (P.rev.ext[r] + 1) / P.data.n; }
+function paintRev(sc) {
+  const box = sc.wrap.getBoundingClientRect(), dpr = sc.win.devicePixelRatio || 1;
+  const w = box.width, h = box.height, rctx = sc.rctx;
+  sc.canvas.width = Math.max(1, Math.round(w * dpr)); sc.canvas.height = Math.max(1, Math.round(h * dpr));
   rctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   rctx.clearRect(0, 0, w, h);
-  $('revinfo').textContent = S.rev ? `${S.rev.n} reversal${S.rev.n === 1 ? '' : 's'}` : '';
-  if (!S.revOn || !S.rev || !S.data || w <= THUMB_W) return;
-  const rv = S.rev, mid = h / 2, tick = 2;
+  if (!P.revOn || !P.rev || !P.data || w <= THUMB_W) return;
+  const rv = P.rev, mid = h / 2, tick = 2;
   for (let r = 0; r < rv.n; r++) {
     const x = Math.round(revX(r, w)) - tick / 2, up = rv.dir[r] > 0;
     rctx.fillStyle = up ? REV_UP : REV_DN;
@@ -576,64 +624,132 @@ function drawRevStrip() {
     else rctx.fillRect(x, 1, tick, mid - 8);                   // high: above the track
   }
 }
-// Hover a tick to see what it is.
-$('scrubwrap').addEventListener('mousemove', e => {
-  const tip = $('revtip'), rv = S.rev;
-  if (!S.revOn || !rv || !S.data || !rv.n) { tip.style.display = 'none'; return; }
-  const box = $('scrubwrap').getBoundingClientRect(), mx = e.clientX - box.left;
-  let best = -1, bd = 6;
-  for (let r = 0; r < rv.n; r++) { const dx = Math.abs(revX(r, box.width) - mx); if (dx < bd) { bd = dx; best = r; } }
-  if (best < 0) { tip.style.display = 'none'; return; }
-  const d = S.data, ei = rv.ext[best], ci = rv.conf[best], up = rv.dir[best] > 0;
-  const mv = Math.abs(d.p[ci] - d.p[ei]);
-  tip.innerHTML = `<b style="color:${up ? REV_UP : REV_DN}">${up ? 'Low' : 'High'} ${d.p[ei].toFixed(2)}</b> at ${fmtHMS(d.t[ei])}.${pad(d.t[ei] % 1000, 3)} ET` +
-    ` &rarr; ${up ? 'up' : 'down'} ${(mv / TICK_SIZE).toFixed(0)} ticks (${mv.toFixed(2)}) by ${fmtHMS(d.t[ci])}`;
-  tip.style.display = 'block';
-  tip.style.left = Math.max(0, Math.min(box.width - tip.offsetWidth, revX(best, box.width) - tip.offsetWidth / 2)) + 'px';
-});
-$('scrubwrap').addEventListener('mouseleave', () => { $('revtip').style.display = 'none'; });
-function setReversal(on) { S.revOn = on; $('revbtn').classList.toggle('on', on); drawRevStrip(); }
-$('revbtn').onclick = () => setReversal(!S.revOn);
+function drawRevStrip() {
+  $('revinfo').textContent = P.rev ? `${P.rev.n} reversal${P.rev.n === 1 ? '' : 's'}` : '';
+  for (const sc of scrubs) paintRev(sc);
+}
+// Slider value / time label follow the replay position (the slider being dragged is left alone).
+function syncScrubs() {
+  const d = P.data; if (!d) return;
+  const txt = P.pos > 0 ? fmtFull(d.t[P.pos - 1]) + ' ET' : '-';
+  for (const sc of scrubs) {
+    sc.slider.max = d.n;
+    if (sc !== P.scrubbing) sc.slider.value = P.pos;
+    sc.time.textContent = txt;
+  }
+}
+
+// Mouse wheel over a slider: scroll down = forward one candle (like the "bar >>" button), scroll up = back one
+// candle (the newest candle is dropped, i.e. rewind to just before its first print).  One wheel notch = one candle
+// OF THE WINDOW THE SLIDER BELONGS TO (a 1 min window steps a minute); events arriving within the same frame are
+// merged so a fast spin costs one rebuild.
+let wheelAcc = 0, wheelSteps = 0, wheelQueued = false, wheelSc = null;
+function candleBackTarget(pos, n, ch) {
+  const bb = ch.S.bb;
+  let last = bb.count() - 1, p = pos;
+  for (let s = 0; s < n && p > 0; s++) {
+    while (last >= 0 && bb.i0[last] >= p) last--;
+    if (last < 0) { p = 0; break; }
+    p = bb.i0[last]; last--;
+  }
+  return p;
+}
+function applyWheelSteps() {
+  wheelQueued = false;
+  const n = wheelSteps; wheelSteps = 0;
+  const ch = wheelSc && wheelSc.chart();
+  if (!P.data || !ch || !ch.S.bb || n === 0) return;
+  if (n > 0) { for (let i = 0; i < n; i++) stepBar(ch); }        // playback keeps running (stepBar / seek re-sync the clock)
+  else seek(candleBackTarget(P.pos, -n, ch));
+}
+function registerScrub(sc) {
+  sc.rctx = sc.canvas.getContext('2d');
+  scrubs.push(sc);
+  sc.slider.addEventListener('input', () => { P.scrubbing = sc; seek(+sc.slider.value); });
+  sc.slider.addEventListener('change', () => { P.scrubbing = null; });
+  sc.wrap.addEventListener('wheel', e => {
+    e.preventDefault();
+    if (!P.data) return;
+    if (wheelSc !== sc) { wheelAcc = 0; wheelSc = sc; }
+    wheelAcc += e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1);
+    if (Math.abs(wheelAcc) < 60) return;                        // trackpads send many small deltas: one step per ~60 px
+    wheelSteps += wheelAcc > 0 ? 1 : -1; wheelAcc = 0;
+    if (!wheelQueued) { wheelQueued = true; (sc.win || window).requestAnimationFrame(applyWheelSteps); }
+  }, { passive: false });
+  // Hover a tick to see what it is.
+  sc.wrap.addEventListener('mousemove', e => {
+    const tip = sc.tip, rv = P.rev;
+    if (!P.revOn || !rv || !P.data || !rv.n) { tip.style.display = 'none'; return; }
+    const box = sc.wrap.getBoundingClientRect(), mx = e.clientX - box.left;
+    let best = -1, bd = 6;
+    for (let r = 0; r < rv.n; r++) { const dx = Math.abs(revX(r, box.width) - mx); if (dx < bd) { bd = dx; best = r; } }
+    if (best < 0) { tip.style.display = 'none'; return; }
+    const d = P.data, ei = rv.ext[best], ci = rv.conf[best], up = rv.dir[best] > 0;
+    const mv = Math.abs(d.p[ci] - d.p[ei]);
+    tip.innerHTML = `<b style="color:${up ? REV_UP : REV_DN}">${up ? 'Low' : 'High'} ${d.p[ei].toFixed(2)}</b> at ${fmtHMS(d.t[ei])}.${pad(d.t[ei] % 1000, 3)} ET` +
+      ` &rarr; ${up ? 'up' : 'down'} ${(mv / TICK_SIZE).toFixed(0)} ticks (${mv.toFixed(2)}) by ${fmtHMS(d.t[ci])}`;
+    tip.style.display = 'block';
+    tip.style.left = Math.max(0, Math.min(box.width - tip.offsetWidth, revX(best, box.width) - tip.offsetWidth / 2)) + 'px';
+  });
+  sc.wrap.addEventListener('mouseleave', () => { sc.tip.style.display = 'none'; });
+  new sc.win.ResizeObserver(() => paintRev(sc)).observe(sc.wrap);
+  if (P.data) { syncScrubs(); paintRev(sc); }
+}
+registerScrub({ wrap: $('scrubwrap'), canvas: $('revstrip'), tip: $('revtip'), slider: $('scrub'), time: $('scrubtime'),
+                win: window, chart: () => charts[0] });
+function setReversal(on) { P.revOn = on; $('revbtn').classList.toggle('on', on); drawRevStrip(); }
+$('revbtn').onclick = () => setReversal(!P.revOn);
 $('revticks').addEventListener('input', e => {
   const v = parseInt(e.target.value, 10);
   if (!Number.isFinite(v) || v < 1) return;
-  S.revTicks = v;
-  if (S.data) S.rev = findReversals(S.data, v);            // one pass over the file, so it is instant
+  P.revTicks = v;
+  if (P.data) P.rev = findReversals(P.data, v);            // one pass over the file, so it is instant
   drawRevStrip();
 });
-new ResizeObserver(drawRevStrip).observe($('scrubwrap'));
 
 function barSpec() {
-  const unit = $('unit').value;
-  const N = unit === 'time' ? (+$('ivl').value) * 1000 : Math.max(1, parseInt($('barsize').value, 10) || 1);
+  const E = cur.el, unit = E.unit.value;
+  const N = unit === 'time' ? (+E.ivl.value) * 1000 : Math.max(1, parseInt(E.size.value, 10) || 1);
   return [N, unit];
 }
 function rebuildBars(pos) {
-  if (!S.data) return;
+  if (!P.data) return;
   const [N, unit] = barSpec();
-  S.bb = new BarBuilder(S.data, N, unit);
+  S.bb = new BarBuilder(P.data, N, unit);
   S.bb.advanceTo(pos);
-  S.pos = pos;
+  if (cur !== charts[0]) cur.doc.title = `${S.bb.label()} - ES Tick Candles`;       // the browser window's title / alt+tab label
 }
+// Bring every window's bars to print `pos` (forward = incremental, backward = rebuild).
+function syncBars(pos) {
+  eachChart(() => {
+    if (!S.bb) return;
+    if (pos >= S.bb.pos) S.bb.advanceTo(pos); else S.bb.rebuildTo(pos);
+  });
+}
+function renderAll() { eachChart(() => render()); }
 
 function seek(pos) {
-  if (!S.data) return;
-  pos = Math.max(0, Math.min(S.data.n, Math.floor(pos)));
-  if (S.bb && pos >= S.bb.pos) S.bb.advanceTo(pos); else if (S.bb) S.bb.rebuildTo(pos);
-  S.pos = pos; syncSim(); S.follow = true; updateFollowBtn(); render();
+  if (!P.data) return;
+  pos = Math.max(0, Math.min(P.data.n, Math.floor(pos)));
+  syncBars(pos);
+  P.pos = pos; syncSim();
+  eachChart(() => { S.follow = true; updateFollowBtn(); });
+  renderAll();
 }
-function syncSim() { const d = S.data; S.simTime = S.pos > 0 ? d.t[S.pos - 1] : d.t[0] - 1; S.acc = 0; }
+function syncSim() { const d = P.data; P.simTime = P.pos > 0 ? d.t[P.pos - 1] : d.t[0] - 1; P.acc = 0; }
 
 function stepTicks(k) {
-  if (!S.data) return;
-  if (k < 0) { seek(S.pos + k); return; }
-  S.bb.advanceTo(Math.min(S.data.n, S.pos + k)); S.pos = S.bb.pos; syncSim(); render();
+  if (!P.data) return;
+  if (k < 0) { seek(P.pos + k); return; }
+  const to = Math.min(P.data.n, P.pos + k);
+  syncBars(to); P.pos = to; syncSim(); renderAll();
 }
-function stepBar() {
-  if (!S.data) return;
-  const nb0 = S.bb.nb;
-  while (S.bb.pos < S.data.n && S.bb.nb === nb0) S.bb.add(S.bb.pos++);
-  S.pos = S.bb.pos; syncSim(); render();
+// One bar of the given window (default: the main one); the other windows follow to the same print.
+function stepBar(ch = charts[0]) {
+  if (!P.data) return;
+  const bb = ch.S.bb, nb0 = bb.nb;
+  while (bb.pos < P.data.n && bb.nb === nb0) bb.add(bb.pos++);
+  P.pos = bb.pos; syncBars(P.pos); syncSim(); renderAll();
 }
 
 // ---------- playback ----------
@@ -641,60 +757,69 @@ function stepBar() {
 // from the live (forming) bar, so price, candle, footprint and tape move tick by tick rather than
 // jumping when a bar closes.  Use the 0.25x / 0.5x / 1x speeds to watch individual prints.
 function setPlaying(on) {
-  if (on && (!S.data || S.pos >= S.data.n)) on = false;
-  S.playing = on; S.lastTs = null;
+  if (on && (!P.data || P.pos >= P.data.n)) on = false;
+  P.playing = on; P.lastTs = null;
   $('play').textContent = on ? 'Pause' : 'Play';
   $('play').classList.toggle('on', on);
-  if (on) { syncSim(); requestAnimationFrame(frame); }
+  for (const ch of charts) if (ch.el.play) { ch.el.play.textContent = on ? 'Pause' : 'Play'; ch.el.play.classList.toggle('on', on); }
+  if (on) { syncSim(); schedFrame(); }
+}
+// The replay clock is driven by the animation frames of ANY open window: a browser stops animation frames of a
+// window that is hidden / covered, so with the main page behind a "+ window" it is the visible window that ticks.
+let frameTok = 0;
+function schedFrame() {
+  const tok = ++frameTok;
+  const fire = () => { if (tok !== frameTok) return; frameTok++; frame(performance.now()); };
+  window.requestAnimationFrame(fire);
+  for (const ch of charts) if (ch.win !== window && !ch.win.closed) { try { ch.win.requestAnimationFrame(fire); } catch (e) {} }
 }
 function frame(ts) {
-  if (!S.playing) return;
-  const dt = S.lastTs == null ? 16 : Math.min(ts - S.lastTs, 100);
-  S.lastTs = ts;
-  const d = S.data, bb = S.bb, speed = +$('speed').value;
-  let target = S.pos;
+  if (!P.playing) return;
+  const dt = P.lastTs == null ? 16 : Math.min(ts - P.lastTs, 100);
+  P.lastTs = ts;
+  const d = P.data, speed = +$('speed').value;
+  let target = P.pos;
   if ($('mode').value === 'rt') {
-    S.simTime += dt * speed;
-    if ($('skipgaps').checked && S.pos < d.n && d.t[S.pos] - S.simTime > 1000) S.simTime = d.t[S.pos] - 1;
-    while (target < d.n && d.t[target] <= S.simTime && target - S.pos < MAX_PER_FRAME) target++;
+    P.simTime += dt * speed;
+    if ($('skipgaps').checked && P.pos < d.n && d.t[P.pos] - P.simTime > 1000) P.simTime = d.t[P.pos] - 1;
+    while (target < d.n && d.t[target] <= P.simTime && target - P.pos < MAX_PER_FRAME) target++;
   } else {
-    S.acc += speed * dt / 1000;
-    const k = Math.floor(S.acc); S.acc -= k;
-    target = Math.min(d.n, S.pos + Math.min(k, MAX_PER_FRAME));
+    P.acc += speed * dt / 1000;
+    const k = Math.floor(P.acc); P.acc -= k;
+    target = Math.min(d.n, P.pos + Math.min(k, MAX_PER_FRAME));
   }
-  if (target > S.pos) { bb.advanceTo(target); S.pos = bb.pos; if ($('mode').value !== 'rt') S.simTime = d.t[S.pos - 1]; }
-  bb.closeTo(S.simTime);                       // time bars close on the clock, even in a quiet interval
-  render();
-  if (S.pos >= d.n) { setPlaying(false); return; }
-  requestAnimationFrame(frame);
+  if (target > P.pos) { syncBars(target); P.pos = target; if ($('mode').value !== 'rt') P.simTime = d.t[P.pos - 1]; }
+  eachChart(() => S.bb.closeTo(P.simTime));    // time bars close on the clock, even in a quiet interval
+  renderAll();
+  if (P.pos >= d.n) { setPlaying(false); return; }
+  schedFrame();
 }
 
 // ---------- UI text ----------
-function updateFollowBtn() { $('follow').classList.toggle('on', S.follow); }
+function updateFollowBtn() { cur.el.follow.classList.toggle('on', S.follow); }
 function updateStatus() {
-  const d = S.data; if (!d) return;
+  const d = P.data; if (!d) return;
   const el = $('status'), n = d.n;
-  if (S.pos === 0) { el.innerHTML = `Before first tick | next tick ${fmtFull(d.t[0])} ET | 0 / ${n.toLocaleString()}`; }
+  if (P.pos === 0) { el.innerHTML = `Before first tick | next tick ${fmtFull(d.t[0])} ET | 0 / ${n.toLocaleString()}`; }
   else {
-    const i = S.pos - 1;
+    const i = P.pos - 1;
     el.innerHTML = `Last tick <b>${fmtFull(d.t[i])} ET</b> &nbsp;|&nbsp; price <b>${d.p[i].toFixed(2)}</b> &times; ${d.q[i]}` +
       ` ${d.side[i] > 0 ? '(buy @ ask)' : '(sell @ bid)'}` +
-      ` &nbsp;|&nbsp; print ${S.pos.toLocaleString()} / ${n.toLocaleString()}` +
+      ` &nbsp;|&nbsp; print ${P.pos.toLocaleString()} / ${n.toLocaleString()}` +
       ` &nbsp;|&nbsp; ${S.bb.count().toLocaleString()} bars of ${S.bb.label()}`;
   }
-  $('scrubtime').textContent = S.pos > 0 ? fmtFull(d.t[S.pos - 1]) + ' ET' : '-';
-  if (!S.scrubbing) $('scrub').value = S.pos;
+  syncScrubs();
 }
 let lastTapeKey = '';
 function updateTape() {
-  const d = S.data; if (!d || !S.tape) return;
+  const d = P.data; if (!d || !S.tape) return;
   const body = $('tapebody');
   const rows = Math.max(1, Math.min(120, Math.floor(body.clientHeight / 15)));
-  const key = S.pos + ':' + rows;
+  const key = P.pos + ':' + rows;
   if (key === lastTapeKey) return;
   lastTapeKey = key;
   let html = '';
-  for (let i = S.pos - 1, c = 0; i >= 0 && c < rows; i--, c++) {
+  for (let i = P.pos - 1, c = 0; i >= 0 && c < rows; i--, c++) {
     html += `<div class="r ${d.side[i] > 0 ? 'b' : 's'}"><span>${fmtHMS(d.t[i])}.${pad(d.t[i] % 1000, 3)}</span>` +
             `<span>${d.p[i].toFixed(2)}</span><span class="${d.q[i] >= 10 ? 'big' : ''}">${d.q[i]}</span></div>`;
   }
@@ -704,22 +829,26 @@ function showMsg(s) { $('msgmain').textContent = s; $('msg').classList.remove('h
 function hideMsg() { $('msg').classList.add('hide'); }
 
 // ---------- chart ----------
-let cssW = 0, cssH = 0;
 function resize() {
-  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
-  cssW = r.width; cssH = r.height;
+  const r = cv.getBoundingClientRect(), dpr = cur.win.devicePixelRatio || 1;
+  cssW = cur.cssW = r.width; cssH = cur.cssH = r.height;
   cv.width = Math.max(1, Math.round(cssW * dpr)); cv.height = Math.max(1, Math.round(cssH * dpr));
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   lastTapeKey = '';
   render();
 }
-let raf = 0;
 function render() {
-  updateStatus(); updateTape();
-  if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(); });
+  const ch = cur;
+  if (ch === charts[0]) { updateStatus(); updateTape(); }          // status bar and tape belong to the main window
+  if (!ch.raf) ch.raf = ch.win.requestAnimationFrame(() => {      // each window paints on its own frame clock
+    ch.raf = 0;
+    if (!charts.includes(ch)) return;
+    const prev = cur; use(ch);
+    try { draw(); } finally { if (charts.includes(prev)) use(prev); }
+  });
 }
 
-const L = {};   // layout, recomputed in draw
+// L: layout of the current chart, recomputed in draw
 function geom() {
   L.axisW = 70; L.axisH = 22; L.padT = 42; L.padL = 6;
   L.plotX = L.padL; L.plotW = Math.max(10, cssW - L.axisW - L.padL);
@@ -931,7 +1060,7 @@ function draw() {
 
   // candles / profile / footprint
   const lastI = count - 1, lastP = bb.c[lastI];
-  const lastSide = S.pos > 0 ? S.data.side[S.pos - 1] : 0;
+  const lastSide = P.pos > 0 ? P.data.side[P.pos - 1] : 0;
   const lastCol = lastSide >= 0 ? C.buy : C.sell, lastY = py(lastP);
   ctx.save(); ctx.beginPath(); ctx.rect(0, L.priceTop, L.plotX + L.plotW, L.priceBottom - L.priceTop); ctx.clip();
   for (let i = lo; i <= hi; i++) {
@@ -1047,7 +1176,7 @@ function draw() {
     ctx.fillText(String(S.spdMin), L.plotX + L.plotW + 6, sy(S.spdMin));
     // live value = speed inside the newest bar (0 once the clock has moved into an interval with no prints yet)
     const kLive = bb.fill > 0 ? bb.nb : (!bb.timeMode && bb.nb > 0 ? bb.nb - 1 : -1);
-    const live = S.pos > 0 && kLive >= 0 && bb.i1[kLive] === S.pos - 1 ? bb.speedAt(S.pos - 1, kLive) : 0;
+    const live = P.pos > 0 && kLive >= 0 && bb.i1[kLive] === P.pos - 1 ? bb.speedAt(P.pos - 1, kLive) : 0;
     tag(String(live), L.plotX + L.plotW, Math.max(spdY0 + 8, sy(live)), live > S.spdMin ? '#2a9d46' : '#4a4f60', '#fff');
   }
   if (S.cvd) {                                   // CVD scale: pane top / bottom, and the live value
@@ -1187,10 +1316,10 @@ function onSplitter(m) {
 }
 function onPriceScale(m) { return m && m.x > L.plotX + L.plotW && m.y >= L.priceTop && m.y <= L.priceBottom; }
 function priceAt(y) { return L.pmax - (y - L.priceTop) / (L.priceBottom - L.priceTop) * (L.pmax - L.pmin); }
-cv.addEventListener('mousemove', e => {
+function onCvMove(e) {
   const r = cv.getBoundingClientRect(); S.mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
   if (S.measure) S.measure.last = S.mouse;
-  if (S.dd) { dragDraw(S.mouse); cv.style.cursor = 'move'; render(); return; }          // editing a drawing
+  if (S.dd) { dragDraw(S.mouse); cv.style.cursor = 'move'; renderAll(); return; }          // drawings are shared: redraw every window (editing a drawing)
   if (!S.drag && !S.axisDrag) cv.style.cursor = (S.splitDrag || onSplitter(S.mouse)) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize'
     : (!S.tool && hitDraw(S.mouse)) ? 'move' : 'crosshair';
   if (S.splitDrag === 'vol') {                 // drag a divider: resize the pane below it
@@ -1215,15 +1344,15 @@ cv.addEventListener('mousemove', e => {
     }
   }
   render();
-});
-cv.addEventListener('mouseleave', () => { S.mouse = null; cv.style.cursor = 'crosshair'; render(); });
-cv.addEventListener('mousedown', e => {
+}
+function onCvLeave() { S.mouse = null; cv.style.cursor = 'crosshair'; render(); }
+function onCvDown(e) {
   const r = cv.getBoundingClientRect();
   const mm = { x: e.clientX - r.left, y: e.clientY - r.top };
   const sp_ = onSplitter(mm);
   if (sp_) { S.splitDrag = sp_; cv.style.cursor = 'row-resize'; return; }
   if (onPriceScale(mm)) { S.axisDrag = { y: mm.y, yOff: S.yOff }; cv.style.cursor = 'ns-resize'; return; }
-  if (e.button === 0 && drawMouseDown(mm)) { e.preventDefault(); render(); return; }   // drawing tools / editing a drawing
+  if (e.button === 0 && drawMouseDown(mm)) { e.preventDefault(); renderAll(); return; }   // drawing tools / editing a drawing
   // Shift + left drag in the price pane: measure ticks from the starting point (instead of panning).
   if (e.shiftKey && e.button === 0 && S.bb && Number.isFinite(L.pmax) && mm.x >= L.plotX && mm.x <= L.plotX + L.plotW &&
       mm.y >= L.priceTop && mm.y <= L.priceBottom) {
@@ -1234,13 +1363,16 @@ cv.addEventListener('mousedown', e => {
   S.drag = { x: mm.x, y: mm.y, viewEnd: S.viewEnd, yOff: S.yOff, span0: L.pmax - L.pmin,
              ppp: (L.pmax - L.pmin) / (L.priceBottom - L.priceTop), xMoved: false, yMoved: false };
   cv.style.cursor = 'grabbing';
-});
-window.addEventListener('mouseup', () => {
-  drawMouseUp();
-  S.drag = null; S.axisDrag = null; S.splitDrag = null; S.measure = null;
-  cv.style.cursor = onSplitter(S.mouse) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair'; render();
-});
-cv.addEventListener('wheel', e => {
+}
+function onWinMouseUp() {
+  eachChart(() => {
+    drawMouseUp();
+    S.drag = null; S.axisDrag = null; S.splitDrag = null; S.measure = null;
+    cv.style.cursor = onSplitter(S.mouse) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair';
+  });
+  renderAll();
+}
+function onCvWheel(e) {
   e.preventDefault();
   if (!S.bb) return;
   const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
@@ -1260,8 +1392,8 @@ cv.addEventListener('wheel', e => {
     S.viewEnd = idx - frac * nv + nv;
   }
   S.vis = nv; render();
-}, { passive: false });
-cv.addEventListener('dblclick', e => {
+}
+function onCvDbl(e) {
   if (S.mouse && drawReady() && !S.tool) {                                            // double-click a line / ray: style popup
     const h = hitDraw(S.mouse);
     if (h && (h.d.type === 'line' || h.d.type === 'ray')) { S.sel = h.d; S.dd = null; openStyler(h.d, e.clientX, e.clientY); render(); return; }
@@ -1271,7 +1403,7 @@ cv.addEventListener('dblclick', e => {
   if (dv_) { if (dv_ === 'vol') S.volFrac = 0.18; else if (dv_ === 'cvd') S.cvdPx = CVD_PX; else S.spdPx = SPD_PX; render(); return; }
   if (onPriceScale(S.mouse)) { S.ySpan = null; S.yOff = 0; render(); return; }      // double-click the scale: auto-fit again
   S.follow = true; updateFollowBtn(); render();
-});
+}
 
 // ---------- drawing tools (left panel) ----------
 // Line   horizontal price line: one click; it starts at the click and runs to the right only.
@@ -1285,7 +1417,7 @@ const DRAW_COL = { line: '#4aa3ff', ray: '#f5a742', tp: '#26a69a', sl: '#ef5350'
 const HIT = 6;                                               // pixel tolerance for grabbing a line
 let drawId = 0;
 function cumQOf() {
-  const d = S.data;
+  const d = P.data;
   if (!S.cumQ || S.cumQ.src !== d) {
     const c = new Float64Array(d.n + 1);
     for (let i = 0; i < d.n; i++) c[i + 1] = c[i] + d.q[i];
@@ -1293,15 +1425,15 @@ function cumQOf() {
   }
   return S.cumQ;
 }
-function drawReady() { return !!(S.bb && S.data && Number.isFinite(L.pmax) && Number.isFinite(L.first) && L.barW > 0); }
+function drawReady() { return !!(S.bb && P.data && Number.isFinite(L.pmax) && Number.isFinite(L.first) && L.barW > 0); }
 function posOfTime(t) {                                      // time (ms) -> bar position (bar k spans [k, k+1))
-  const bb = S.bb, d = S.data;
+  const bb = S.bb, d = P.data;
   if (bb.timeMode) return (t - Math.floor(d.t[0] / bb.N) * bb.N) / bb.N;
   const r = lowerBound(d.t, t, d.n);
   return (bb.contracts ? cumQOf()[r] : r) / bb.N;
 }
 function timeOfPos(x) {
-  const bb = S.bb, d = S.data;
+  const bb = S.bb, d = P.data;
   if (bb.timeMode) return Math.round(Math.floor(d.t[0] / bb.N) * bb.N + x * bb.N);
   const u = Math.max(0, x * bb.N);
   const r = bb.contracts ? lowerBound(cumQOf(), Math.floor(u) + 1, d.n + 1) - 1 : Math.floor(u);
@@ -1330,8 +1462,8 @@ function rayDist(m, g) {
 // What is under the mouse: { d: drawing, part } or null.  Topmost (newest) drawing wins.
 function hitDraw(m) {
   if (!m || !drawReady() || !inPricePane(m)) return null;
-  for (let i = S.draws.length - 1; i >= 0; i--) {
-    const d = S.draws[i], g = geomOf(d);
+  for (let i = P.draws.length - 1; i >= 0; i--) {
+    const d = P.draws[i], g = geomOf(d);
     if (d.type === 'line') {
       if (Math.hypot(m.x - g.x0, m.y - g.y) <= 8) return { d, part: 'anchor' };
       if (Math.abs(m.y - g.y) <= HIT && m.x >= g.x0 - HIT) return { d, part: 'price' };
@@ -1353,9 +1485,9 @@ function hitDraw(m) {
 }
 
 function updateToolButtons() {
-  for (const b of document.querySelectorAll('#tools button[data-tool]'))
+  for (const b of cur.el.tools.querySelectorAll('button[data-tool]'))
     b.classList.toggle('on', b.dataset.tool === (S.tool || 'select'));
-  $('tl_del').disabled = !S.sel;
+  cur.el.tools.querySelector('[data-act=del]').disabled = !S.sel;
   cv.style.cursor = 'crosshair';
 }
 function setTool(t) {
@@ -1364,20 +1496,26 @@ function setTool(t) {
   if (S.tool) S.sel = null;
   updateToolButtons(); render();
 }
+// Drawings are shared by all windows: removing one clears it from every window's selection too.
+function forgetDrawings(gone) {
+  eachChart(() => {
+    if (gone ? S.sel === gone : true) S.sel = null;
+    if (!gone || (S.dd && S.dd.d === gone)) S.dd = null;
+    if (!gone) S.pend = null;
+    updateToolButtons();
+  });
+}
 function deleteSelected() {
   if (!S.sel) return;
-  S.draws = S.draws.filter(d => d !== S.sel); S.sel = null; S.dd = null;
-  updateToolButtons(); render();
+  const gone = S.sel;
+  P.draws = P.draws.filter(d => d !== gone); forgetDrawings(gone); renderAll();
 }
-for (const b of document.querySelectorAll('#tools button[data-tool]')) b.onclick = () => setTool(b.dataset.tool);
-$('tl_del').onclick = deleteSelected;
-$('tl_clear').onclick = () => {
-  if (S.draws.length && !confirm('Remove all drawings?')) return;
-  S.draws = []; S.sel = null; S.pend = null; S.dd = null; updateToolButtons(); render();
-};
-updateToolButtons();
+function clearDrawings() {
+  if (P.draws.length && !cur.win.confirm('Remove all drawings (in every window)?')) return;
+  P.draws = []; forgetDrawings(null); renderAll();
+}
 
-function addDraw(d) { d.id = ++drawId; S.draws.push(d); S.sel = d; S.tool = null; S.pend = null; updateToolButtons(); }
+function addDraw(d) { d.id = ++drawId; P.draws.push(d); S.sel = d; S.tool = null; S.pend = null; updateToolButtons(); }
 function newRR(kind, m) {
   const ts = TICK_SIZE, entry = snapP(priceAt(m.y)), dir = kind === 'buy' ? 1 : -1;
   const risk = Math.max(4 * ts, snapP((L.pmax - L.pmin) * 0.06));         // default: 6% of the visible price range, 1 : 2
@@ -1386,10 +1524,10 @@ function newRR(kind, m) {
            entry, sl: entry - dir * risk, tp: entry + dir * 2 * risk };
 }
 function commitRay(m) {
-  const P = S.pend, t1 = tOfX(m.x), p1 = snapP(priceAt(m.y));
+  const pd = S.pend, t1 = tOfX(m.x), p1 = snapP(priceAt(m.y));
   S.pend = null;
-  if (t1 === P.t0 && p1 === P.p0) { updateToolButtons(); return; }       // zero length: cancel
-  addDraw({ type: 'ray', t0: P.t0, p0: P.p0, t1, p1 });
+  if (t1 === pd.t0 && p1 === pd.p0) { updateToolButtons(); return; }     // zero length: cancel
+  addDraw({ type: 'ray', t0: pd.t0, p0: pd.p0, t1, p1 });
 }
 // Returns true when the click was consumed by the drawing layer (so the chart must not start a pan).
 function drawMouseDown(mm) {
@@ -1405,10 +1543,10 @@ function drawMouseDown(mm) {
 }
 function drawMouseUp() {
   S.dd = null;
-  const P = S.pend;
-  if (P && P.down) {                                                       // press-drag-release ray, or the first of two clicks
+  const pd = S.pend;
+  if (pd && pd.down) {                                                     // press-drag-release ray, or the first of two clicks
     const m = S.mouse;
-    if (m && Math.hypot(m.x - P.ax, m.y - P.ay) > 5) commitRay(m); else P.down = false;
+    if (m && Math.hypot(m.x - pd.ax, m.y - pd.ay) > 5) commitRay(m); else pd.down = false;
   }
 }
 function dragDraw(m) {
@@ -1445,37 +1583,39 @@ function contrastFg(hex) {                                   // dark or white te
   return lum > 140 ? '#0b0e14' : '#fff';
 }
 const SWATCHES = ['#4aa3ff', '#f5a742', '#26a69a', '#ef5350', '#b47cf5', '#f5c542', '#ffffff', '#8b8f9a'];
+const stylerEl = $('styler'), SQ = id => stylerEl.querySelector('#' + id);   // the popup moves into the window that opens it
 let stylerD = null;
-function stylerOpen() { return $('styler').style.display !== 'none'; }
-function closeStyler() { $('styler').style.display = 'none'; stylerD = null; }
+function stylerOpen() { return stylerEl.style.display !== 'none'; }
+function closeStyler() { stylerEl.style.display = 'none'; stylerD = null; }
 function openStyler(d, cx, cy) {
   stylerD = d;
-  const box = $('styler'), col = colOf(d), lw = lwOf(d);
-  $('st_col').value = col; $('st_w').value = lw; $('st_wv').textContent = lw;
+  const box = stylerEl, col = colOf(d), lw = lwOf(d);
+  SQ('st_col').value = col; SQ('st_w').value = lw; SQ('st_wv').textContent = lw;
+  cur.doc.body.appendChild(box);                                       // show it in the window that was double-clicked
   box.style.display = 'flex';
   const w = box.offsetWidth || 190, h = box.offsetHeight || 110;
-  box.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, cx + 10)) + 'px';
-  box.style.top = Math.max(4, Math.min(window.innerHeight - h - 4, cy + 10)) + 'px';
+  box.style.left = Math.max(4, Math.min(cur.win.innerWidth - w - 4, cx + 10)) + 'px';
+  box.style.top = Math.max(4, Math.min(cur.win.innerHeight - h - 4, cy + 10)) + 'px';
 }
 function applyStyle(col, lw) {
   if (!stylerD) return;
-  if (col) { stylerD.col = col; $('st_col').value = col; }
-  if (lw) { stylerD.lw = +lw; $('st_wv').textContent = lw; }
-  render();
+  if (col) { stylerD.col = col; SQ('st_col').value = col; }
+  if (lw) { stylerD.lw = +lw; SQ('st_wv').textContent = lw; }
+  renderAll();
 }
 (function initStyler() {
-  const sw = $('st_sw');
+  const sw = SQ('st_sw');
   for (const c of SWATCHES) {
     const b = document.createElement('button');
     b.className = 'sw'; b.style.background = c; b.title = c; b.onclick = () => applyStyle(c, null);
     sw.appendChild(b);
   }
-  $('st_col').oninput = e => applyStyle(e.target.value, null);
-  $('st_w').oninput = e => applyStyle(null, e.target.value);
-  $('st_ok').onclick = closeStyler;
-  $('styler').addEventListener('keydown', e => { if (e.key === 'Escape' || e.key === 'Enter') { e.stopPropagation(); closeStyler(); } });
-  window.addEventListener('mousedown', e => { if (stylerOpen() && !$('styler').contains(e.target)) closeStyler(); });
+  SQ('st_col').oninput = e => applyStyle(e.target.value, null);
+  SQ('st_w').oninput = e => applyStyle(null, e.target.value);
+  SQ('st_ok').onclick = closeStyler;
+  stylerEl.addEventListener('keydown', e => { if (e.key === 'Escape' || e.key === 'Enter') { e.stopPropagation(); closeStyler(); } });
 })();
+function onWinMouseDownStyler(e) { if (stylerOpen() && !stylerEl.contains(e.target)) closeStyler(); }
 
 function pill(txt, cx, cy, bg, fg) {
   ctx.font = `bold 11px ${SANS}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -1522,11 +1662,12 @@ function drawRR(d, sel) {
   }
 }
 function drawDrawings() {
-  if (!S.draws.length && !S.pend && !S.tool) return;
-  if (!S.bb || !S.data) return;
+  if (S.sel && !P.draws.includes(S.sel)) S.sel = null;
+  if (!P.draws.length && !S.pend && !S.tool) return;
+  if (!S.bb || !P.data) return;
   const right = L.plotX + L.plotW;
   ctx.save(); ctx.beginPath(); ctx.rect(L.plotX, L.priceTop, L.plotW, L.priceBottom - L.priceTop); ctx.clip();
-  for (const d of S.draws) {
+  for (const d of P.draws) {
     const sel = d === S.sel, g = geomOf(d);
     if (d.type === 'line') {
       hseg(Math.max(g.x0, L.plotX), right, g.y, colOf(d), lwOf(d) + (sel ? 0.5 : 0));
@@ -1557,9 +1698,9 @@ function drawDrawings() {
 }
 // Price-axis tags for horizontal lines and for the selected risk:reward box.
 function drawDrawingTags() {
-  if (!S.bb || !S.data || !S.draws.length) return;
+  if (!S.bb || !P.data || !P.draws.length) return;
   const x = L.plotX + L.plotW, vis = p => { const y = pyL(p); return y >= L.priceTop && y <= L.priceBottom ? y : null; };
-  for (const d of S.draws) {
+  for (const d of P.draws) {
     const list = d.type === 'line' ? [[d.p, colOf(d), contrastFg(colOf(d))]]
       : (d === S.sel && (d.type === 'buy' || d.type === 'sell')) ? [[d.tp, DRAW_COL.tp, '#0b0e14'], [d.sl, DRAW_COL.sl, '#0b0e14'], [d.entry, '#4a4f60', '#fff']] : [];
     for (const [p, bg, fg] of list) { const y = vis(p); if (y != null) tag(p.toFixed(2), x, y, bg, fg); }
@@ -1567,104 +1708,84 @@ function drawDrawingTags() {
 }
 
 function setFootprint(on) {
-  S.fp = on; $('fp').classList.toggle('on', on);
+  S.fp = on; cur.el.fp.classList.toggle('on', on);
   if (on && S.vis > 30) S.vis = FP_VIS;            // footprint needs wide bars
   if (!on && S.vis < 40) S.vis = CANDLE_VIS;
   render();
 }
-function setVolumePane(on) { S.vol = on; $('volbtn').classList.toggle('on', on); render(); }
-function setCvdPane(on) { S.cvd = on; $('cvdbtn').classList.toggle('on', on); render(); }
-function setSpeedPane(on) { S.spd = on; $('spdbtn').classList.toggle('on', on); render(); }
+function setVolumePane(on) { S.vol = on; cur.el.vol.classList.toggle('on', on); render(); }
+function setCvdPane(on) { S.cvd = on; cur.el.cvd.classList.toggle('on', on); render(); }
+function setSpeedPane(on) { S.spd = on; cur.el.spd.classList.toggle('on', on); render(); }
 function setTape(on) { S.tape = on; $('tape').classList.toggle('hide', !on); $('tapebtn').classList.toggle('on', on); lastTapeKey = ''; }
 function syncUnitControls() {
-  const time = $('unit').value === 'time';
-  $('barsize').style.display = time ? 'none' : ''; $('ivl').style.display = time ? '' : 'none';
+  const E = cur.el, time = E.unit.value === 'time';
+  E.size.style.display = time ? 'none' : ''; E.ivl.style.display = time ? '' : 'none';
 }
 
-$('play').onclick = () => setPlaying(!S.playing);
+$('play').onclick = () => setPlaying(!P.playing);
 $('steptick').onclick = () => { setPlaying(false); stepTicks(1); };
 $('stepback').onclick = () => { setPlaying(false); stepTicks(-1); };
 $('stepbar').onclick = () => { setPlaying(false); stepBar(); };
 $('tostart').onclick = () => { setPlaying(false); seek(0); };
-$('follow').onclick = () => { S.follow = !S.follow; updateFollowBtn(); render(); };
-$('fp').onclick = () => setFootprint(!S.fp);
-$('tapebtn').onclick = () => setTape(!S.tape);
-$('spdbtn').onclick = () => setSpeedPane(!S.spd);
-$('volbtn').onclick = () => setVolumePane(!S.vol);
-$('cvdbtn').onclick = () => setCvdPane(!S.cvd);
-function setSpeedMin(v) { if (Number.isFinite(v) && v >= 0) { S.spdMin = v; $('spdmin').value = v; render(); } }
-$('spdmin').addEventListener('input', e => { const v = parseInt(e.target.value, 10); if (Number.isFinite(v) && v >= 0) { S.spdMin = v; render(); } });
+// The toolbar's bar-type / pane buttons drive the main window (a "+ window" has the same controls in its own header).
+const onMain = fn => e => { use(charts[0]); fn(e); };
+$('follow').onclick = onMain(() => { S.follow = !S.follow; updateFollowBtn(); render(); });
+$('fp').onclick = onMain(() => setFootprint(!S.fp));
+$('tapebtn').onclick = onMain(() => setTape(!S.tape));
+$('spdbtn').onclick = onMain(() => setSpeedPane(!S.spd));
+$('volbtn').onclick = onMain(() => setVolumePane(!S.vol));
+$('cvdbtn').onclick = onMain(() => setCvdPane(!S.cvd));
+// the speed-of-tape threshold is one setting for every window
+function setSpeedMin(v) { if (Number.isFinite(v) && v >= 0) { eachChart(() => { S.spdMin = v; render(); }); $('spdmin').value = v; } }
+$('spdmin').addEventListener('input', e => { const v = parseInt(e.target.value, 10); if (Number.isFinite(v) && v >= 0) setSpeedMin(v); });
 $('go').onclick = goTime;
 $('gotime').addEventListener('keydown', e => { if (e.key === 'Enter') goTime(); });
 function goTime() {
   const tod = parseTod($('gotime').value);
   if (tod == null) { $('gotime').style.borderColor = '#ef5350'; return; }
   $('gotime').style.borderColor = '';
-  const idx = S.data ? seekIndexForTod(S.data, tod) : -1;
+  const idx = P.data ? seekIndexForTod(P.data, tod) : -1;
   if (idx < 0) { $('gotime').style.borderColor = '#ef5350'; return; }
   setPlaying(false); seek(idx);
 }
-$('mode').onchange = () => { fillSpeeds(); if (S.playing) syncSim(); };
-$('speed').onchange = () => { if (S.playing) syncSim(); };
-function onBarChange() { syncUnitControls(); if (!S.data) return; rebuildBars(S.pos); S.follow = true; updateFollowBtn(); render(); }
-$('barsize').addEventListener('change', onBarChange);
-$('unit').addEventListener('change', onBarChange);
-$('ivl').addEventListener('change', onBarChange);
-$('scrub').addEventListener('input', e => { S.scrubbing = true; seek(+e.target.value); });
-$('scrub').addEventListener('change', () => { S.scrubbing = false; });
-
-// Mouse wheel over the slider: scroll down = forward one candle (like the "bar >>" button), scroll up = back one
-// candle (the newest candle is dropped, i.e. rewind to just before its first print).  One wheel notch = one candle;
-// events arriving within the same frame are merged so a fast spin costs one rebuild.
-let wheelAcc = 0, wheelSteps = 0, wheelQueued = false;
-function candleBackTarget(pos, n) {
-  const bb = S.bb;
-  let last = bb.count() - 1, p = pos;
-  for (let s = 0; s < n && p > 0; s++) {
-    while (last >= 0 && bb.i0[last] >= p) last--;
-    if (last < 0) { p = 0; break; }
-    p = bb.i0[last]; last--;
-  }
-  return p;
-}
-function applyWheelSteps() {
-  wheelQueued = false;
-  const n = wheelSteps; wheelSteps = 0;
-  if (!S.data || !S.bb || n === 0) return;
-  if (n > 0) { for (let i = 0; i < n; i++) stepBar(); }          // playback keeps running (stepBar / seek re-sync the clock)
-  else seek(candleBackTarget(S.pos, -n));
-}
-$('scrubwrap').addEventListener('wheel', e => {
-  e.preventDefault();
-  if (!S.data) return;
-  wheelAcc += e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1);
-  if (Math.abs(wheelAcc) < 60) return;                        // trackpads send many small deltas: one step per ~60 px
-  wheelSteps += wheelAcc > 0 ? 1 : -1; wheelAcc = 0;
-  if (!wheelQueued) { wheelQueued = true; requestAnimationFrame(applyWheelSteps); }
-}, { passive: false });
-window.addEventListener('keydown', e => {
+$('mode').onchange = () => { fillSpeeds(); if (P.playing) syncSim(); };
+$('speed').onchange = () => { if (P.playing) syncSim(); };
+function onBarChange() { syncUnitControls(); if (!P.data) return; rebuildBars(P.pos); S.follow = true; updateFollowBtn(); render(); }
+$('barsize').addEventListener('change', onMain(onBarChange));
+$('unit').addEventListener('change', onMain(onBarChange));
+$('ivl').addEventListener('change', onMain(onBarChange));
+function onKey(e) {
   const tag_ = (e.target.tagName || '').toLowerCase();
   if (tag_ === 'input' && e.target.type !== 'range' && e.target.type !== 'checkbox') return;
   if (tag_ === 'select') return;
-  if (e.key === ' ') { e.preventDefault(); setPlaying(!S.playing); }
+  use(active);                                                // F / V / C / S / End / Esc / Delete act on the window the key was pressed in
+  if (e.key === ' ') { e.preventDefault(); setPlaying(!P.playing); }
   else if (e.key === 'ArrowRight') { e.preventDefault(); setPlaying(false); e.shiftKey ? stepBar() : stepTicks(1); }
   else if (e.key === 'ArrowLeft') { e.preventDefault(); setPlaying(false); stepTicks(-1); }
   else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
     const s = $('speed'); const j = s.selectedIndex + (e.key === 'ArrowUp' ? 1 : -1);
-    if (j >= 0 && j < s.options.length) { e.preventDefault(); s.selectedIndex = j; if (S.playing) syncSim(); }
+    if (j >= 0 && j < s.options.length) { e.preventDefault(); s.selectedIndex = j; if (P.playing) syncSim(); }
   }
   else if (e.key === 'Home') { setPlaying(false); seek(0); }
   else if (e.key === 'End') { S.follow = true; updateFollowBtn(); render(); }
   else if (e.key === 'f' || e.key === 'F') setFootprint(!S.fp);
-  else if (e.key === 't' || e.key === 'T') setTape(!S.tape);
+  else if (e.key === 't' || e.key === 'T') { use(charts[0]); setTape(!S.tape); }
   else if (e.key === 's' || e.key === 'S') setSpeedPane(!S.spd);
   else if (e.key === 'v' || e.key === 'V') setVolumePane(!S.vol);
   else if (e.key === 'c' || e.key === 'C') setCvdPane(!S.cvd);
-  else if (e.key === 'r' || e.key === 'R') setReversal(!S.revOn);
+  else if (e.key === 'r' || e.key === 'R') setReversal(!P.revOn);
   else if (e.key === 'Escape') { closeStyler(); S.pend = null; S.tool = null; S.sel = null; S.dd = null; updateToolButtons(); render(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { if (!stylerOpen()) deleteSelected(); }
   else if (e.key === 'b' || e.key === 'B') setToolbarCollapsed(!$('toolbar').classList.contains('collapsed'));
-});
+  else if (e.key === 'd' || e.key === 'D') { const t = (active || charts[0]).el.tools; setToolsCollapsed(t, !t.classList.contains('collapsed')); }
+}
+// Collapse / expand a left drawing panel (the chart canvas is observed, so it re-fits by itself).
+function setToolsCollapsed(tools, c) {
+  tools.classList.toggle('collapsed', c);
+  const b = tools.querySelector('.tcollapse');
+  if (b) b.innerHTML = c ? '&#187;' : '&#171;';
+  try { localStorage.setItem('tv_tools_collapsed', c ? '1' : '0'); } catch (e) {}
+}
 // Collapse / expand the top toolbar (the chart canvas is observed, so it re-fits by itself).
 function setToolbarCollapsed(c) {
   $('toolbar').classList.toggle('collapsed', c);
@@ -1673,8 +1794,125 @@ function setToolbarCollapsed(c) {
 }
 $('tbtoggle').onclick = () => setToolbarCollapsed(!$('toolbar').classList.contains('collapsed'));
 try { if (localStorage.getItem('tv_toolbar_collapsed') === '1') setToolbarCollapsed(true); } catch (e) {}
-window.addEventListener('resize', resize);
-new ResizeObserver(resize).observe(cv);
+
+// ---------- chart windows ----------
+// "+ window" opens a real browser window (alt+tab to it, drag it to another monitor).  It is a same-origin popup
+// whose document is built and driven by THIS page, so every window shares one clock (P.pos / P.playing), the data
+// and the drawings; each has its own bar type (unit / size), zoom, panes and drawing tool.  Drawings are stored as
+// time + price, so a line drawn on a 5 s footprint shows at the same place on a 1 min window, and vice versa.
+// Closing this page closes the extra windows (they have no data of their own).
+let active = null;
+function setActive(ch) { active = ch; }
+function hookWindow(win, ch) {                  // input that is not on the canvas itself: keys, mouse release, popup dismissal
+  win.addEventListener('keydown', e => { setActive(ch); onKey(e); });
+  win.addEventListener('mouseup', onWinMouseUp);
+  win.addEventListener('mousedown', onWinMouseDownStyler);
+}
+function makeChart(cvEl, el, winEl, win) {
+  const ch = { cv: cvEl, ctx: cvEl.getContext('2d'), S: newState(), L: {}, cssW: 0, cssH: 0, raf: 0, el, winEl, win, doc: win.document, ro: null };
+  charts.push(ch);
+  cvEl.addEventListener('mousemove', e => { use(ch); onCvMove(e); });
+  cvEl.addEventListener('mouseenter', () => setActive(ch));
+  cvEl.addEventListener('mouseleave', () => { use(ch); onCvLeave(); });
+  cvEl.addEventListener('mousedown', e => { setActive(ch); use(ch); onCvDown(e); });
+  cvEl.addEventListener('wheel', e => { use(ch); onCvWheel(e); }, { passive: false });
+  cvEl.addEventListener('dblclick', e => { use(ch); onCvDbl(e); });
+  for (const b of el.tools.querySelectorAll('button[data-tool]')) b.onclick = () => { setActive(ch); use(ch); setTool(b.dataset.tool); };
+  el.tools.querySelector('.tcollapse').onclick = () => setToolsCollapsed(el.tools, !el.tools.classList.contains('collapsed'));
+  setToolsCollapsed(el.tools, el.tools.classList.contains('collapsed'));
+  el.tools.querySelector('[data-act=del]').onclick = () => { use(ch); deleteSelected(); };
+  el.tools.querySelector('[data-act=clear]').onclick = () => { use(ch); clearDrawings(); };
+  const refit = () => {
+    if (!charts.includes(ch)) return;
+    const prev = cur; use(ch); resize();
+    if (prev && charts.includes(prev)) use(prev);
+  };
+  ch.ro = new win.ResizeObserver(refit);        // the window's own observer: it fires on that window's layout
+  ch.ro.observe(cvEl);
+  win.addEventListener('resize', refit);
+  hookWindow(win, ch);
+  const prev = cur; use(ch); updateToolButtons(); if (prev) use(prev);
+  return ch;
+}
+let winSeq = 1;
+function addWindow() {
+  const n = ++winSeq;
+  const w = window.open('', 'tickviewer_win_' + n + '_' + Date.now(),
+                        `popup=yes,width=1100,height=720,left=${Math.max(0, (window.screenX || 0) + 60)},top=${Math.max(0, (window.screenY || 0) + 60)}`);
+  if (!w) { alert('The browser blocked the new window. Allow pop-ups for this page and click "+ window" again.'); return null; }
+  winSeq = n;
+  const doc = w.document;
+  doc.open(); doc.write('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>Window ' + n + '</title></head><body></body></html>'); doc.close();
+  for (const st of document.querySelectorAll('style')) doc.head.appendChild(doc.importNode(st, true));   // same look as this page
+  const win = doc.createElement('div'); win.className = 'win active';
+  win.innerHTML =
+    `<div class="whead"><span class="wtitle">Window ${n}</span>` +
+    `<select class="w_unit" title="How a candle is formed"><option value="ticks">ticks (prints)</option>` +
+    `<option value="contracts">contracts (sum of size)</option><option value="time" selected>time</option></select>` +
+    `<input class="w_size" type="number" min="1" max="100000" value="200" step="1" style="display:none">` +
+    `<select class="w_ivl" title="Candle interval"><option value="1">1s</option><option value="5">5s</option>` +
+    `<option value="15">15s</option><option value="60" selected>1min</option><option value="300">5min</option></select>` +
+    `<button class="w_fp" title="Footprint + volume profile inside each candle (F)">Footprint</button>` +
+    `<button class="w_vol on" title="Volume pane (V)">Volume</button>` +
+    `<button class="w_cvd" title="CVD pane (C)">CVD</button>` +
+    `<button class="w_spd" title="Speed-of-tape pane (S)">Speed</button>` +
+    `<button class="w_follow on" title="Keep newest bar in view (End)">Follow</button>` +
+    `<span class="wnote">Space = play / pause, arrows = step, shift+arrow = bar</span></div>` +
+    `<div class="scrubrow"><button class="w_start" title="Jump to start (Home)">|&lt;</button>` +
+    `<button class="w_back" title="Back one tick (Left arrow)">&lt; tick</button>` +
+    `<button class="w_play" style="min-width:74px" title="Play / pause (Space)">Play</button>` +
+    `<button class="w_fwd" title="Forward one tick (Right arrow)">tick &gt;</button>` +
+    `<button class="w_bar" title="Forward one candle of THIS window (Shift+Right arrow is one candle of the main page)">bar &gt;&gt;</button>` +
+    `<div class="scrubwrap" title="Drag, or scroll the mouse wheel: one candle of this window per notch">` +
+    `<input class="scrub" type="range" min="0" max="0" value="0" step="1"><canvas class="revstrip"></canvas><div class="revtip"></div></div>` +
+    `<div class="scrubtime">-</div></div>` +
+    `<div class="wbody"><div class="chartbox"><canvas></canvas></div></div>`;
+  const tools = doc.importNode($('tools'), true);
+  tools.removeAttribute('id'); for (const x of tools.querySelectorAll('[id]')) x.removeAttribute('id');
+  tools.style.display = '';
+  win.querySelector('.wbody').prepend(tools);
+  doc.body.appendChild(win);
+  const q = c => win.querySelector('.' + c);
+  const el = { fp: q('w_fp'), vol: q('w_vol'), cvd: q('w_cvd'), spd: q('w_spd'), follow: q('w_follow'),
+               unit: q('w_unit'), size: q('w_size'), ivl: q('w_ivl'), play: q('w_play'), tools };
+  const ch = makeChart(win.querySelector('.chartbox canvas'), el, win, w);
+  Object.assign(ch.S, { fp: false, vis: CANDLE_VIS, cvd: false, spd: false, spdMin: charts[0].S.spdMin });
+  const run = fn => e => { setActive(ch); use(ch); fn(e); };
+  el.fp.onclick = run(() => setFootprint(!S.fp));
+  el.vol.onclick = run(() => setVolumePane(!S.vol));
+  el.cvd.onclick = run(() => setCvdPane(!S.cvd));
+  el.spd.onclick = run(() => setSpeedPane(!S.spd));
+  el.follow.onclick = run(() => { S.follow = !S.follow; updateFollowBtn(); render(); });
+  for (const c of [el.unit, el.size, el.ivl]) c.addEventListener('change', run(onBarChange));
+  q('w_start').onclick = () => { setPlaying(false); seek(0); };
+  q('w_back').onclick = () => { setPlaying(false); stepTicks(-1); };
+  q('w_play').onclick = () => setPlaying(!P.playing);
+  q('w_fwd').onclick = () => { setPlaying(false); stepTicks(1); };
+  q('w_bar').onclick = () => { setPlaying(false); stepBar(ch); };
+  ch.sc = { wrap: q('scrubwrap'), canvas: q('revstrip'), tip: q('revtip'), slider: q('scrub'), time: q('scrubtime'), win: w, chart: () => ch };
+  registerScrub(ch.sc);
+  el.play.textContent = P.playing ? 'Pause' : 'Play'; el.play.classList.toggle('on', P.playing);
+  w.addEventListener('pagehide', () => closeWindow(ch, true));      // the user closed the window
+  setActive(ch);
+  use(ch); syncUnitControls();
+  if (P.data) { rebuildBars(P.pos); S.follow = true; }
+  render();
+  w.focus();
+  return ch;
+}
+function closeWindow(ch, alreadyClosed) {
+  const i = charts.indexOf(ch);
+  if (i <= 0) return;                                          // the main page stays
+  charts.splice(i, 1); try { ch.ro.disconnect(); } catch (e) {}
+  const k = scrubs.indexOf(ch.sc); if (k >= 0) scrubs.splice(k, 1);
+  if (!alreadyClosed && !ch.win.closed) ch.win.close();
+  if (active === ch) setActive(charts[0]);
+  if (cur === ch) use(charts[0]);
+  renderAll();
+}
+setInterval(() => { for (const ch of charts.slice(1)) if (ch.win.closed) closeWindow(ch, true); }, 1000);   // (backup for pagehide)
+window.addEventListener('pagehide', () => { for (const ch of charts.slice(1)) { try { ch.win.close(); } catch (e) {} } });
+$('addwin').onclick = () => { addWindow(); };
 
 // ---------- recording ----------
 // rec=<seconds>: play from the start time and record chart + tape + status bar into a WebM, then POST it
@@ -1686,6 +1924,7 @@ function startRecording(secs) {
   const m = /^(\d+)x(\d+)$/.exec(new URLSearchParams(location.search).get('size') || '');
   if (!m) { beginRecording(secs); return; }
   const W = +m[1], H = +m[2], body = document.body;
+  use(charts[0]);
   $('tools').style.display = 'none';                       // the drawing panel is not part of the video layout
   document.documentElement.style.overflow = 'hidden';
   body.style.width = W + 'px';
@@ -1695,6 +1934,7 @@ function startRecording(secs) {
   requestAnimationFrame(() => requestAnimationFrame(() => beginRecording(secs)));
 }
 function beginRecording(secs) {
+  use(charts[0]);
   const MR = window.MediaRecorder;
   if (!MR || !HTMLCanvasElement.prototype.captureStream) { postStatus('error: MediaRecorder / canvas.captureStream not supported'); return; }
   const box = $('chartbox').getBoundingClientRect();
@@ -1726,15 +1966,15 @@ function beginRecording(secs) {
   };
   const paint = () => {
     rx.fillStyle = C.bg; rx.fillRect(0, 0, rc.width, rc.height);
-    rx.drawImage(cv, 0, 0, cw, ch);
-    const d = S.data;
+    rx.drawImage(charts[0].cv, 0, 0, cw, ch);
+    const d = P.data;
     if (tapeW) {
       rx.fillStyle = '#171b26'; rx.fillRect(cw, 0, tapeW, ch);
       rx.fillStyle = C.axis; rx.fillRect(cw, 0, 1, ch); rx.fillRect(cw, 22, tapeW, 1);
       rx.textBaseline = 'middle'; rx.textAlign = 'left';
       rx.font = `11px ${SANS}`; rx.fillStyle = '#8b8f9a'; rx.fillText('Time & Sales (ET)', cw + 8, 11);
-      for (let i = S.pos - 1, y = 23; i >= 0 && y + 15 <= ch; i--, y += 15) {
-        if (i === S.pos - 1) { rx.fillStyle = 'rgba(255,255,255,.08)'; rx.fillRect(cw + 1, y, tapeW - 1, 15); }
+      for (let i = P.pos - 1, y = 23; i >= 0 && y + 15 <= ch; i--, y += 15) {
+        if (i === P.pos - 1) { rx.fillStyle = 'rgba(255,255,255,.08)'; rx.fillRect(cw + 1, y, tapeW - 1, 15); }
         rx.fillStyle = d.side[i] > 0 ? C.buy : C.sell;
         rx.font = `${d.q[i] >= 10 ? 'bold ' : ''}11px ${MONO}`;
         rx.textAlign = 'left';  rx.fillText(`${fmtHMS(d.t[i])}.${pad(d.t[i] % 1000, 3)}`, cw + 8, y + 8);
@@ -1752,7 +1992,7 @@ function beginRecording(secs) {
   loop();
   rec.start(1000);
   setPlaying(true);
-  postStatus(`recording ${secs}s at ${rc.width}x${rc.height} (window ${innerWidth}x${innerHeight}, ${rec.mimeType || 'default'}) from ${S.pos > 0 ? fmtFull(S.data.t[S.pos - 1]) : '-'} ET`);
+  postStatus(`recording ${secs}s at ${rc.width}x${rc.height} (window ${innerWidth}x${innerHeight}, ${rec.mimeType || 'default'}) from ${P.pos > 0 ? fmtFull(P.data.t[P.pos - 1]) : '-'} ET`);
   setTimeout(() => { paint(); on = false; rec.stop(); }, secs * 1000);
 }
 
@@ -1800,11 +2040,15 @@ async function autoLoad() {
   }
 }
 
+try { if (localStorage.getItem('tv_tools_collapsed') === '1') $('tools').classList.add('collapsed'); } catch (e) {}
+makeChart($('cv'), { fp: $('fp'), vol: $('volbtn'), cvd: $('cvdbtn'), spd: $('spdbtn'), follow: $('follow'),
+                     unit: $('unit'), size: $('barsize'), ivl: $('ivl'), tools: $('tools') }, $('win0'), window);
+use(charts[0]); setActive(charts[0]);
 fillSpeeds();
 syncUnitControls();
 resize();
 autoLoad();
-window.__tv = S;     // handy for debugging in the console
+window.__tv = charts[0].S; window.__P = P; window.__charts = charts;     // handy for debugging in the console
 })();
 </script>
 </body>
