@@ -6,7 +6,7 @@
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: #131722; color: #d1d4dc;
+  html, body { margin: 0; height: 100%; background: #000000; color: #d1d4dc;
                font: 13px/1.3 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   body { display: flex; flex-direction: column; }
   #toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
@@ -514,7 +514,7 @@ let cv, ctx, S, L, cssW = 0, cssH = 0, cur = null;
 const charts = [];                             // charts[0] is the main window
 function use(ch) { cur = ch; cv = ch.cv; ctx = ch.ctx; S = ch.S; L = ch.L; cssW = ch.cssW; cssH = ch.cssH; }
 function eachChart(fn) { const prev = cur; for (const ch of charts.slice()) { use(ch); fn(ch); } if (prev && charts.includes(prev)) use(prev); else use(charts[0]); }
-const C = { bg: '#131722', grid: '#232733', text: '#9aa0ad', axis: '#2a2e39', up: '#26a69a', down: '#ef5350',
+const C = { bg: '#000000', grid: '#232733', text: '#9aa0ad', axis: '#2a2e39', up: '#26a69a', down: '#ef5350',
             flat: '#8b8f9a', cross: '#6b7080', poc: '#f5c542',
             buy: '#43d65f', sell: '#b47cf5',                  // aggressive buyer (at ask) / seller (at bid)
             buyBar: 'rgba(67,214,95,.45)', sellBar: 'rgba(150,90,230,.55)',
@@ -936,14 +936,13 @@ function draw() {
   const step = Math.max(ts, niceStep((pmax - pmin) / Math.max(3, (L.priceBottom - L.priceTop) / 55)));
   const labels = [];
   ctx.save(); ctx.beginPath(); ctx.rect(0, L.priceTop, L.plotX + L.plotW, L.priceBottom - L.priceTop); ctx.clip();
-  ctx.strokeStyle = C.grid; ctx.beginPath();
+  // (grid lines removed: only collect the price label positions)
   for (let v = Math.ceil(pmin / step) * step; v <= pmax; v += step) {
-    const y = Math.round(py(v)) + 0.5; ctx.moveTo(0, y); ctx.lineTo(L.plotX + L.plotW, y); labels.push([v, y]);
+    const y = Math.round(py(v)) + 0.5; labels.push([v, y]);
   }
-  ctx.stroke(); ctx.restore();                 // (price-pane only: a panned/zoomed range must not draw into the volume pane)
+  ctx.restore();                 // (price-pane only: a panned/zoomed range must not draw into the volume pane)
   // vertical grid + time labels collected
-  ctx.strokeStyle = C.grid; ctx.beginPath();
-  const tl = [];
+  const tl = [];   // (vertical grid lines removed: only collect the time label positions)
   if (bb.timeMode) {
     // Time bars: label a bar only when it opens a new round time step (a multiple of the interval,
     // e.g. :00 :05 :10 for 5 s bars), so every label on the axis is a clean multiple of the candle size.
@@ -953,15 +952,14 @@ function draw() {
       if (i > 0 && Math.floor(bb.t0[i] / step) === Math.floor(bb.t0[i - 1] / step)) continue;
       const x = Math.round(barX(i)) + 0.5;
       if (x - lastX < 70) continue;
-      lastX = x; ctx.moveTo(x, 0); ctx.lineTo(x, L.volBottom); tl.push([i, x]);
+      lastX = x; tl.push([i, x]);
     }
   } else {
     const spacing = Math.max(1, Math.ceil(95 / L.barW));
     for (let i = Math.ceil(lo / spacing) * spacing; i <= hi; i += spacing) {
-      const x = Math.round(barX(i)) + 0.5; ctx.moveTo(x, 0); ctx.lineTo(x, L.volBottom); tl.push([i, x]);
+      const x = Math.round(barX(i)) + 0.5; tl.push([i, x]);
     }
   }
-  ctx.stroke();
 
   // day boundaries (the session crosses midnight ET)
   ctx.strokeStyle = '#4a4f60'; ctx.setLineDash([4, 4]); ctx.beginPath();
