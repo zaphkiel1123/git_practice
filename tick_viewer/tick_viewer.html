@@ -44,6 +44,21 @@
   #scrubtime { min-width: 190px; text-align: right; font-variant-numeric: tabular-nums; }
   #chartwrap { flex: 1; display: flex; min-height: 0; }
   #chartbox { flex: 1; position: relative; min-width: 0; }
+  #tools { width: 58px; flex: none; display: flex; flex-direction: column; gap: 4px; padding: 6px 5px;
+           background: #1e222d; border-right: 1px solid #2a2e39; }
+  #tools .th { color: #5d6270; font-size: 10px; text-align: center; text-transform: uppercase; letter-spacing: .08em; }
+  #tools button { width: 100%; min-width: 0; padding: 5px 2px; font-size: 11px; }
+  #styler { position: fixed; z-index: 30; width: 230px; padding: 8px 10px; display: flex; flex-direction: column; gap: 8px;
+            background: #1e222d; border: 1px solid #3a3f4d; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
+  #styler .srow { display: flex; align-items: center; gap: 8px; }
+  #styler .srow > label { width: 44px; }
+  #styler input[type=color] { width: 34px; height: 24px; padding: 0; border: 1px solid #3a3f4d; background: none; cursor: pointer; }
+  #styler input[type=range] { flex: 1; min-width: 0; padding: 0; }
+  #styler #st_sw { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+  #styler button.sw { min-width: 0; width: 16px; height: 16px; padding: 0; border-radius: 3px; border: 1px solid #3a3f4d; }
+  #tools .sep { height: 1px; background: #2a2e39; margin: 3px 0; }
+  #tools button.buy.on { background: #26a69a; border-color: #26a69a; }
+  #tools button.sell.on { background: #ef5350; border-color: #ef5350; }
   canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
   #tape { width: 210px; border-left: 1px solid #2a2e39; background: #171b26; display: flex; flex-direction: column;
           font: 11px/15px ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace; }
@@ -132,12 +147,29 @@
   <div id="scrubtime">-</div>
 </div>
 <div id="chartwrap">
+  <div id="tools">
+    <div class="th">Draw</div>
+    <button data-tool="select" class="on" title="Select / move / edit drawings (Esc)">Select</button>
+    <button data-tool="line" title="Horizontal line: click once; it starts at the click and runs to the right">Line</button>
+    <button data-tool="ray" title="Ray: click (or press-drag-release) the start point, then click a second point; it extends beyond it">Ray</button>
+    <div class="sep"></div>
+    <button data-tool="buy" class="buy" title="Buy (long) risk:reward: click for the entry, then drag the TP / SL / entry lines and the right edge">Buy RR</button>
+    <button data-tool="sell" class="sell" title="Sell (short) risk:reward: click for the entry, then drag the TP / SL / entry lines and the right edge">Sell RR</button>
+    <div class="sep"></div>
+    <button id="tl_del" title="Delete the selected drawing (Delete)">Delete</button>
+    <button id="tl_clear" title="Remove all drawings">Clear</button>
+  </div>
   <div id="chartbox">
     <canvas id="cv"></canvas>
     <div id="msg"><div id="msgmain">Loading...</div>
       <div id="help">Drop a <code>.data</code> file here or use "Open .data". All times shown are New York (ET).</div></div>
   </div>
   <div id="tape"><div id="tapehead">Time &amp; Sales (ET)</div><div id="tapebody"></div></div>
+</div>
+<div id="styler" style="display:none">
+  <div class="srow"><label for="st_col">Colour</label><input id="st_col" type="color" value="#4aa3ff"><div id="st_sw"></div></div>
+  <div class="srow"><label for="st_w">Width</label><input id="st_w" type="range" min="0.5" max="8" step="0.5" value="1.5"><span id="st_wv">1.5</span></div>
+  <div class="srow" style="justify-content:flex-end"><button id="st_ok">Done</button></div>
 </div>
 <div id="status">&nbsp;</div>
 
@@ -447,12 +479,12 @@ const C = { bg: '#131722', grid: '#232733', text: '#9aa0ad', axis: '#2a2e39', up
             buy: '#43d65f', sell: '#b47cf5',                  // aggressive buyer (at ask) / seller (at bid)
             buyBar: 'rgba(67,214,95,.45)', sellBar: 'rgba(150,90,230,.55)',
             greyBar: 'rgba(150,155,170,.50)',                 // the non-dominant side of a level (or both sides if neither dominates)
-            buyImbText: '#3efe35', sellImbText: '#c04bff',   // imbalance font colours: green (buy) / purple (sell); style from es_training/view_data/candlestick_viewer.html
+            buyImbText: '#3efe35', sellImbText: '#d891ff',   // imbalance font colours: green (buy) / purple (sell); style from es_training/view_data/candlestick_viewer.html
             text2: '#ffffff' };
 const MONO = 'ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace';
 // Footprint numbers: light-weight, narrow sans so more candles fit on screen with the digits still readable.
 const NUMFONT = '"Roboto Condensed", "Arial Narrow", "Liberation Sans Narrow", "Helvetica Neue", Arial, sans-serif';
-function numFont(px) { ctx.font = `${px}px ${NUMFONT}`; if ('fontStretch' in ctx) ctx.fontStretch = 'semi-condensed'; }
+function numFont(px, bold) { ctx.font = `${bold ? 'bold ' : ''}${px}px ${NUMFONT}`; if ('fontStretch' in ctx) ctx.fontStretch = 'semi-condensed'; }
 const SANS = '-apple-system, "Segoe UI", Roboto, sans-serif';
 const SPEEDS = {
   rt:   [0.25, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800, 3600],
@@ -478,6 +510,7 @@ const S = {
   ySpan: null, yOff: 0, axisDrag: null,      // manual price-scale zoom (ySpan = visible points; null = auto-fit)
   rev: null, revOn: true, revTicks: 40,      // reversal points on the slider: findReversals() result, on/off, size in ticks
   measure: null,                             // shift + drag ruler: { p0 start price, idx0 start bar position, last mouse pos }
+  draws: [], tool: null, sel: null, dd: null, pend: null, cumQ: null,   // drawing tools (see "drawing tools" below)
 };
 
 // ---------- speed select ----------
@@ -503,6 +536,7 @@ function setData(buf, name) {
   if (!data.sorted) warn += ' | WARNING: timestamps not sorted';
   if (y < 2000 || y > 2100) warn += ` | WARNING: odd year ${y}, file layout may differ`;
   S.data = data; S.name = name; lastTapeKey = '';
+  S.draws = []; S.sel = null; S.dd = null; S.pend = null; S.cumQ = null;       // drawings belong to the previous file
   S.rev = findReversals(data, S.revTicks);
   $('scrub').max = data.n;
   drawRevStrip();
@@ -958,6 +992,8 @@ function draw() {
     if (idx >= 0 && idx < count) hover = idx;
   }
 
+  drawDrawings();
+
   // Measure ruler (shift + drag): box from the start point to the cursor, labelled with the price distance in ticks.
   // The start stays on its price / bar as the chart moves; the end follows the cursor, snapped to the 0.25 tick grid.
   if (S.measure) {
@@ -1004,6 +1040,7 @@ function draw() {
   for (const [v, y] of labels) ctx.fillText(v.toFixed(2), L.plotX + L.plotW + 6, y);
   tag(lastP.toFixed(2), L.plotX + L.plotW, lastY, lastSide >= 0 ? '#2a9d46' : '#7e45c2', '#fff');
   if (chPrice != null) tag(chPrice.toFixed(2), L.plotX + L.plotW, py(chPrice), '#4a4f60', '#fff');
+  drawDrawingTags();
   if (S.spd) {                                   // speed-of-tape scale: pane top, the threshold, and the live value
     ctx.fillStyle = C.text; ctx.textAlign = 'left';
     ctx.fillText(fmtSpeed(spdTopV), L.plotX + L.plotW + 6, spdY0 + 6);
@@ -1099,7 +1136,7 @@ function drawProfileCandle(fp, cx, colW, o, c, h, l, col, py) {
 // trades on only one side shows 0 on the other; a level with no trades at all is left blank.
 //  - Imbalance (rule and font from es_training/view_data/candlestick_viewer.html): buy >= 3x the sell one
 //    tick below, or sell >= 3x the buy one tick above (the opposite volume must be > 0).  That number is
-//    drawn in purple (sell) / green (buy) instead of white (same light weight as the other numbers).
+//    drawn in bold purple (sell) / green (buy), 2px larger, instead of white.
 //  - Profile colour per level: buyers > 125% of sellers => buy bar green, sell bar grey; sellers > 125% of
 //    buyers => sell bar purple, buy bar grey; otherwise both grey.
 //  - The POC row is outlined (profile area only), with just a faint tint.
@@ -1119,10 +1156,10 @@ function drawFootprint(fp, cx, colW, o, c, h, l, col, py, rowPx) {
     if (a) { const w = Math.max(1, g.half * a / fp.maxSide); ctx.fillStyle = dm > 0 ? C.buyBar : C.greyBar; ctx.fillRect(g.axisX, top, w, rh); }
     const sellBold = fp.sellImb[j] === 1, buyBold = fp.buyImb[j] === 1;
     ctx.textAlign = 'right';                                 // 0 is printed for the empty side
-    numFont(fs);                                             // imbalance = colour only, same light weight
+    numFont(sellBold ? fs + 2 : fs, sellBold);               // imbalance = colour + bold + 2px larger
     ctx.fillStyle = sellBold ? C.sellImbText : C.text2; ctx.fillText(String(b), g.axisX - 3, ym);
     ctx.textAlign = 'left';
-    numFont(fs);
+    numFont(buyBold ? fs + 2 : fs, buyBold);
     ctx.fillStyle = buyBold ? C.buyImbText : C.text2; ctx.fillText(String(a), g.axisX + 3, ym);
     if (j === fp.poc) { ctx.strokeStyle = 'rgba(245,197,66,.85)'; ctx.lineWidth = 1; ctx.strokeRect(g.fx0 + 0.5, top, g.fW - 1, rh); }
   }
@@ -1153,7 +1190,9 @@ function priceAt(y) { return L.pmax - (y - L.priceTop) / (L.priceBottom - L.pric
 cv.addEventListener('mousemove', e => {
   const r = cv.getBoundingClientRect(); S.mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
   if (S.measure) S.measure.last = S.mouse;
-  if (!S.drag && !S.axisDrag) cv.style.cursor = (S.splitDrag || onSplitter(S.mouse)) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair';
+  if (S.dd) { dragDraw(S.mouse); cv.style.cursor = 'move'; render(); return; }          // editing a drawing
+  if (!S.drag && !S.axisDrag) cv.style.cursor = (S.splitDrag || onSplitter(S.mouse)) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize'
+    : (!S.tool && hitDraw(S.mouse)) ? 'move' : 'crosshair';
   if (S.splitDrag === 'vol') {                 // drag a divider: resize the pane below it
     const h = (cssH - L.axisH) - (S.mouse.y + 3);
     S.volFrac = Math.max(36 / L.availH, Math.min(0.7, h / L.availH));
@@ -1184,6 +1223,7 @@ cv.addEventListener('mousedown', e => {
   const sp_ = onSplitter(mm);
   if (sp_) { S.splitDrag = sp_; cv.style.cursor = 'row-resize'; return; }
   if (onPriceScale(mm)) { S.axisDrag = { y: mm.y, yOff: S.yOff }; cv.style.cursor = 'ns-resize'; return; }
+  if (e.button === 0 && drawMouseDown(mm)) { e.preventDefault(); render(); return; }   // drawing tools / editing a drawing
   // Shift + left drag in the price pane: measure ticks from the starting point (instead of panning).
   if (e.shiftKey && e.button === 0 && S.bb && Number.isFinite(L.pmax) && mm.x >= L.plotX && mm.x <= L.plotX + L.plotW &&
       mm.y >= L.priceTop && mm.y <= L.priceBottom) {
@@ -1196,6 +1236,7 @@ cv.addEventListener('mousedown', e => {
   cv.style.cursor = 'grabbing';
 });
 window.addEventListener('mouseup', () => {
+  drawMouseUp();
   S.drag = null; S.axisDrag = null; S.splitDrag = null; S.measure = null;
   cv.style.cursor = onSplitter(S.mouse) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair'; render();
 });
@@ -1220,12 +1261,310 @@ cv.addEventListener('wheel', e => {
   }
   S.vis = nv; render();
 }, { passive: false });
-cv.addEventListener('dblclick', () => {
+cv.addEventListener('dblclick', e => {
+  if (S.mouse && drawReady() && !S.tool) {                                            // double-click a line / ray: style popup
+    const h = hitDraw(S.mouse);
+    if (h && (h.d.type === 'line' || h.d.type === 'ray')) { S.sel = h.d; S.dd = null; openStyler(h.d, e.clientX, e.clientY); render(); return; }
+  }
+  if (S.mouse && drawReady() && (S.tool || hitDraw(S.mouse))) return;                // not on a drawing / while a tool is armed
   const dv_ = onSplitter(S.mouse);                                            // double-click a divider: default height
   if (dv_) { if (dv_ === 'vol') S.volFrac = 0.18; else if (dv_ === 'cvd') S.cvdPx = CVD_PX; else S.spdPx = SPD_PX; render(); return; }
   if (onPriceScale(S.mouse)) { S.ySpan = null; S.yOff = 0; render(); return; }      // double-click the scale: auto-fit again
   S.follow = true; updateFollowBtn(); render();
 });
+
+// ---------- drawing tools (left panel) ----------
+// Line   horizontal price line: one click; it starts at the click and runs to the right only.
+// Ray    two points (click / click, or press-drag-release); extends past the second point.
+// Buy RR / Sell RR   risk:reward box (like a TradingView long / short position): entry, stop loss (SL), take
+//        profit (TP) and a right edge.  Buy: TP above entry, SL below.  Sell: the reverse.  R:R = reward / risk.
+// Every point is stored as real time + price, so a drawing stays put when the bar type / size changes.
+// Time <-> bar position is linear in each bar mode (time bars: ms; tick bars: print index; contracts bars:
+// cumulative contracts), so drawings can also be placed in the not-yet-replayed area to the right.
+const DRAW_COL = { line: '#4aa3ff', ray: '#f5a742', tp: '#26a69a', sl: '#ef5350', entry: '#aab0c0' };
+const HIT = 6;                                               // pixel tolerance for grabbing a line
+let drawId = 0;
+function cumQOf() {
+  const d = S.data;
+  if (!S.cumQ || S.cumQ.src !== d) {
+    const c = new Float64Array(d.n + 1);
+    for (let i = 0; i < d.n; i++) c[i + 1] = c[i] + d.q[i];
+    c.src = d; S.cumQ = c;
+  }
+  return S.cumQ;
+}
+function drawReady() { return !!(S.bb && S.data && Number.isFinite(L.pmax) && Number.isFinite(L.first) && L.barW > 0); }
+function posOfTime(t) {                                      // time (ms) -> bar position (bar k spans [k, k+1))
+  const bb = S.bb, d = S.data;
+  if (bb.timeMode) return (t - Math.floor(d.t[0] / bb.N) * bb.N) / bb.N;
+  const r = lowerBound(d.t, t, d.n);
+  return (bb.contracts ? cumQOf()[r] : r) / bb.N;
+}
+function timeOfPos(x) {
+  const bb = S.bb, d = S.data;
+  if (bb.timeMode) return Math.round(Math.floor(d.t[0] / bb.N) * bb.N + x * bb.N);
+  const u = Math.max(0, x * bb.N);
+  const r = bb.contracts ? lowerBound(cumQOf(), Math.floor(u) + 1, d.n + 1) - 1 : Math.floor(u);
+  return d.t[Math.max(0, Math.min(d.n - 1, r))];
+}
+const xOfPos = p => L.plotX + (p - L.first) * L.barW;
+const posOfX = x => L.first + (x - L.plotX) / L.barW;
+const xOfT = t => xOfPos(posOfTime(t));
+const tOfX = x => timeOfPos(posOfX(x));
+const snapP = p => Math.round(p / TICK_SIZE) * TICK_SIZE;
+const pyL = p => L.priceTop + (L.pmax - p) / (L.pmax - L.pmin) * (L.priceBottom - L.priceTop);
+function inPricePane(m) { return m && m.x >= L.plotX && m.x <= L.plotX + L.plotW && m.y >= L.priceTop && m.y <= L.priceBottom; }
+
+function geomOf(d) {
+  if (d.type === 'line') return { x0: xOfT(d.t0), y: pyL(d.p) };
+  if (d.type === 'ray') return { x0: xOfT(d.t0), y0: pyL(d.p0), x1: xOfT(d.t1), y1: pyL(d.p1) };
+  return { x0: xOfT(d.t0), x1: xOfT(d.t1), yE: pyL(d.entry), yTP: pyL(d.tp), ySL: pyL(d.sl) };
+}
+function rayDist(m, g) {
+  const dx = g.x1 - g.x0, dy = g.y1 - g.y0, len2 = dx * dx + dy * dy;
+  if (len2 < 1e-9) return Math.hypot(m.x - g.x0, m.y - g.y0);
+  const s = ((m.x - g.x0) * dx + (m.y - g.y0) * dy) / len2;
+  if (s < 0) return Math.hypot(m.x - g.x0, m.y - g.y0);
+  return Math.abs((m.x - g.x0) * dy - (m.y - g.y0) * dx) / Math.sqrt(len2);
+}
+// What is under the mouse: { d: drawing, part } or null.  Topmost (newest) drawing wins.
+function hitDraw(m) {
+  if (!m || !drawReady() || !inPricePane(m)) return null;
+  for (let i = S.draws.length - 1; i >= 0; i--) {
+    const d = S.draws[i], g = geomOf(d);
+    if (d.type === 'line') {
+      if (Math.hypot(m.x - g.x0, m.y - g.y) <= 8) return { d, part: 'anchor' };
+      if (Math.abs(m.y - g.y) <= HIT && m.x >= g.x0 - HIT) return { d, part: 'price' };
+    } else if (d.type === 'ray') {
+      if (Math.hypot(m.x - g.x0, m.y - g.y0) <= 8) return { d, part: 'a' };
+      if (Math.hypot(m.x - g.x1, m.y - g.y1) <= 8) return { d, part: 'b' };
+      if (rayDist(m, g) <= HIT) return { d, part: 'move' };
+    } else {
+      const top = Math.min(g.yTP, g.ySL, g.yE), bot = Math.max(g.yTP, g.ySL, g.yE);
+      if (m.y < top - HIT || m.y > bot + HIT || m.x < g.x0 - HIT || m.x > g.x1 + HIT) continue;
+      if (Math.abs(m.x - g.x1) <= HIT && m.y >= top && m.y <= bot) return { d, part: 'right' };
+      if (Math.abs(m.y - g.yTP) <= HIT) return { d, part: 'tp' };
+      if (Math.abs(m.y - g.ySL) <= HIT) return { d, part: 'sl' };
+      if (Math.abs(m.y - g.yE) <= HIT) return { d, part: 'entry' };
+      if (m.x >= g.x0 && m.x <= g.x1 && m.y >= top && m.y <= bot) return { d, part: 'move' };
+    }
+  }
+  return null;
+}
+
+function updateToolButtons() {
+  for (const b of document.querySelectorAll('#tools button[data-tool]'))
+    b.classList.toggle('on', b.dataset.tool === (S.tool || 'select'));
+  $('tl_del').disabled = !S.sel;
+  cv.style.cursor = 'crosshair';
+}
+function setTool(t) {
+  S.tool = (t === 'select' || t === S.tool) ? null : t;
+  S.pend = null; S.dd = null;
+  if (S.tool) S.sel = null;
+  updateToolButtons(); render();
+}
+function deleteSelected() {
+  if (!S.sel) return;
+  S.draws = S.draws.filter(d => d !== S.sel); S.sel = null; S.dd = null;
+  updateToolButtons(); render();
+}
+for (const b of document.querySelectorAll('#tools button[data-tool]')) b.onclick = () => setTool(b.dataset.tool);
+$('tl_del').onclick = deleteSelected;
+$('tl_clear').onclick = () => {
+  if (S.draws.length && !confirm('Remove all drawings?')) return;
+  S.draws = []; S.sel = null; S.pend = null; S.dd = null; updateToolButtons(); render();
+};
+updateToolButtons();
+
+function addDraw(d) { d.id = ++drawId; S.draws.push(d); S.sel = d; S.tool = null; S.pend = null; updateToolButtons(); }
+function newRR(kind, m) {
+  const ts = TICK_SIZE, entry = snapP(priceAt(m.y)), dir = kind === 'buy' ? 1 : -1;
+  const risk = Math.max(4 * ts, snapP((L.pmax - L.pmin) * 0.06));         // default: 6% of the visible price range, 1 : 2
+  const p0 = posOfX(m.x);
+  return { type: kind, t0: timeOfPos(p0), t1: timeOfPos(p0 + Math.max(6, S.vis * 0.15)),
+           entry, sl: entry - dir * risk, tp: entry + dir * 2 * risk };
+}
+function commitRay(m) {
+  const P = S.pend, t1 = tOfX(m.x), p1 = snapP(priceAt(m.y));
+  S.pend = null;
+  if (t1 === P.t0 && p1 === P.p0) { updateToolButtons(); return; }       // zero length: cancel
+  addDraw({ type: 'ray', t0: P.t0, p0: P.p0, t1, p1 });
+}
+// Returns true when the click was consumed by the drawing layer (so the chart must not start a pan).
+function drawMouseDown(mm) {
+  if (!drawReady() || !inPricePane(mm)) return false;
+  if (S.pend) { if (!S.pend.down) commitRay(mm); return true; }          // second click of a ray
+  if (S.tool === 'line') { addDraw({ type: 'line', t0: tOfX(mm.x), p: snapP(priceAt(mm.y)) }); return true; }
+  if (S.tool === 'ray') { S.pend = { t0: tOfX(mm.x), p0: snapP(priceAt(mm.y)), ax: mm.x, ay: mm.y, down: true }; return true; }
+  if (S.tool === 'buy' || S.tool === 'sell') { addDraw(newRR(S.tool, mm)); return true; }
+  const h = hitDraw(mm);
+  if (h) { S.sel = h.d; S.dd = { d: h.d, part: h.part, m0: mm, o: Object.assign({}, h.d) }; updateToolButtons(); return true; }
+  if (S.sel) { S.sel = null; updateToolButtons(); }                        // click on empty chart: deselect (and pan)
+  return false;
+}
+function drawMouseUp() {
+  S.dd = null;
+  const P = S.pend;
+  if (P && P.down) {                                                       // press-drag-release ray, or the first of two clicks
+    const m = S.mouse;
+    if (m && Math.hypot(m.x - P.ax, m.y - P.ay) > 5) commitRay(m); else P.down = false;
+  }
+}
+function dragDraw(m) {
+  const D = S.dd, d = D.d, o = D.o, ts = TICK_SIZE;
+  const dPos = (m.x - D.m0.x) / L.barW;
+  const dP = Math.round((priceAt(m.y) - priceAt(D.m0.y)) / ts) * ts;
+  const shiftT = t => timeOfPos(posOfTime(t) + dPos), pAbs = snapP(priceAt(m.y));
+  if (d.type === 'line') {
+    if (D.part === 'anchor') d.t0 = shiftT(o.t0);
+    d.p = o.p + dP;
+  } else if (d.type === 'ray') {
+    if (D.part === 'a') { d.t0 = tOfX(m.x); d.p0 = pAbs; }
+    else if (D.part === 'b') { d.t1 = tOfX(m.x); d.p1 = pAbs; }
+    else { d.t0 = shiftT(o.t0); d.t1 = shiftT(o.t1); d.p0 = o.p0 + dP; d.p1 = o.p1 + dP; }
+  } else {
+    const dir = d.type === 'buy' ? 1 : -1;
+    if (D.part === 'move') { d.t0 = shiftT(o.t0); d.t1 = shiftT(o.t1); d.entry = o.entry + dP; d.sl = o.sl + dP; d.tp = o.tp + dP; }
+    else if (D.part === 'tp') d.tp = dir > 0 ? Math.max(pAbs, d.entry + ts) : Math.min(pAbs, d.entry - ts);
+    else if (D.part === 'sl') d.sl = dir > 0 ? Math.min(pAbs, d.entry - ts) : Math.max(pAbs, d.entry + ts);
+    else if (D.part === 'entry') {
+      const lo = dir > 0 ? d.sl + ts : d.tp + ts, hi = dir > 0 ? d.tp - ts : d.sl - ts;
+      d.entry = Math.max(lo, Math.min(hi, pAbs));
+    } else if (D.part === 'right') d.t1 = timeOfPos(Math.max(posOfX(m.x), posOfTime(d.t0) + 0.5));
+  }
+}
+
+// Per-drawing style (lines and rays): d.col / d.lw override the defaults.  Double-click a line or ray to edit.
+const colOf = d => d.col || DRAW_COL[d.type];
+const lwOf = d => d.lw || 1.5;
+function contrastFg(hex) {                                   // dark or white text on a coloured price tag
+  const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return '#0b0e14';
+  const v = parseInt(m[1], 16), lum = 0.299 * (v >> 16) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255);
+  return lum > 140 ? '#0b0e14' : '#fff';
+}
+const SWATCHES = ['#4aa3ff', '#f5a742', '#26a69a', '#ef5350', '#b47cf5', '#f5c542', '#ffffff', '#8b8f9a'];
+let stylerD = null;
+function stylerOpen() { return $('styler').style.display !== 'none'; }
+function closeStyler() { $('styler').style.display = 'none'; stylerD = null; }
+function openStyler(d, cx, cy) {
+  stylerD = d;
+  const box = $('styler'), col = colOf(d), lw = lwOf(d);
+  $('st_col').value = col; $('st_w').value = lw; $('st_wv').textContent = lw;
+  box.style.display = 'flex';
+  const w = box.offsetWidth || 190, h = box.offsetHeight || 110;
+  box.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, cx + 10)) + 'px';
+  box.style.top = Math.max(4, Math.min(window.innerHeight - h - 4, cy + 10)) + 'px';
+}
+function applyStyle(col, lw) {
+  if (!stylerD) return;
+  if (col) { stylerD.col = col; $('st_col').value = col; }
+  if (lw) { stylerD.lw = +lw; $('st_wv').textContent = lw; }
+  render();
+}
+(function initStyler() {
+  const sw = $('st_sw');
+  for (const c of SWATCHES) {
+    const b = document.createElement('button');
+    b.className = 'sw'; b.style.background = c; b.title = c; b.onclick = () => applyStyle(c, null);
+    sw.appendChild(b);
+  }
+  $('st_col').oninput = e => applyStyle(e.target.value, null);
+  $('st_w').oninput = e => applyStyle(null, e.target.value);
+  $('st_ok').onclick = closeStyler;
+  $('styler').addEventListener('keydown', e => { if (e.key === 'Escape' || e.key === 'Enter') { e.stopPropagation(); closeStyler(); } });
+  window.addEventListener('mousedown', e => { if (stylerOpen() && !$('styler').contains(e.target)) closeStyler(); });
+})();
+
+function pill(txt, cx, cy, bg, fg) {
+  ctx.font = `bold 11px ${SANS}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const w = Math.round(ctx.measureText(txt).width + 12);
+  ctx.fillStyle = bg; ctx.fillRect(Math.round(cx - w / 2), Math.round(cy - 8), w, 16);
+  ctx.fillStyle = fg; ctx.fillText(txt, Math.round(cx), Math.round(cy) + 0.5);
+}
+function handleSq(x, y) {
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1.5;
+  ctx.fillRect(Math.round(x) - 4, Math.round(y) - 4, 8, 8); ctx.strokeRect(Math.round(x) - 3.5, Math.round(y) - 3.5, 7, 7);
+}
+function handleDot(x, y) {
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+}
+function hseg(x0, x1, y, col, lw, dash) {
+  ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.setLineDash(dash || []);
+  ctx.beginPath(); ctx.moveTo(x0, Math.round(y) + 0.5); ctx.lineTo(x1, Math.round(y) + 0.5); ctx.stroke(); ctx.setLineDash([]);
+}
+function rayEnd(g) {                                          // far point of a ray, well past the plot edge
+  const dx = g.x1 - g.x0, dy = g.y1 - g.y0, len = Math.hypot(dx, dy);
+  return len < 1e-9 ? null : [g.x0 + dx * 8000 / len, g.y0 + dy * 8000 / len];
+}
+function drawRR(d, sel) {
+  const g = geomOf(d), ts = TICK_SIZE, right = L.plotX + L.plotW;
+  const xl = Math.min(g.x0, g.x1), xr = Math.max(g.x0, g.x1), w = xr - xl;
+  if (xr < L.plotX || xl > right) return;
+  ctx.fillStyle = 'rgba(38,166,154,.20)'; ctx.fillRect(xl, Math.min(g.yE, g.yTP), w, Math.abs(g.yTP - g.yE));
+  ctx.fillStyle = 'rgba(239,83,80,.20)'; ctx.fillRect(xl, Math.min(g.yE, g.ySL), w, Math.abs(g.ySL - g.yE));
+  const lw = sel ? 2 : 1.5;
+  hseg(xl, xr, g.yTP, DRAW_COL.tp, lw); hseg(xl, xr, g.ySL, DRAW_COL.sl, lw); hseg(xl, xr, g.yE, DRAW_COL.entry, 1, [4, 3]);
+  ctx.strokeStyle = 'rgba(170,176,192,.55)'; ctx.lineWidth = 1; ctx.beginPath();
+  const x0p = Math.round(g.x0) + 0.5, x1p = Math.round(g.x1) + 0.5, yTop = Math.min(g.yTP, g.ySL, g.yE), yBot = Math.max(g.yTP, g.ySL, g.yE);
+  ctx.moveTo(x0p, yTop); ctx.lineTo(x0p, yBot); ctx.moveTo(x1p, yTop); ctx.lineTo(x1p, yBot); ctx.stroke();
+  const tpTk = Math.round(Math.abs(d.tp - d.entry) / ts), slTk = Math.round(Math.abs(d.entry - d.sl) / ts);
+  const ratio = slTk ? tpTk / slTk : 0, cx = (Math.max(xl, L.plotX) + Math.min(xr, right)) / 2;
+  const sTP = Math.sign(g.yE - g.yTP), sSL = Math.sign(g.yE - g.ySL);
+  if (Math.abs(g.yE - g.yTP) >= 34) pill(`TP ${d.tp.toFixed(2)}   +${tpTk} ticks (+${(tpTk * ts).toFixed(2)})`, cx, g.yTP + sTP * 11, DRAW_COL.tp, '#0b0e14');
+  if (Math.abs(g.yE - g.ySL) >= 34) pill(`SL ${d.sl.toFixed(2)}   -${slTk} ticks (-${(slTk * ts).toFixed(2)})`, cx, g.ySL + sSL * 11, DRAW_COL.sl, '#0b0e14');
+  pill(`${d.type === 'buy' ? 'Buy' : 'Sell'} @ ${d.entry.toFixed(2)}    R:R 1 : ${ratio.toFixed(2)}`, cx, g.yE, '#4a4f60', '#fff');
+  if (sel) {
+    handleSq(cx - 40, g.yTP); handleSq(cx - 40, g.ySL); handleSq(cx - 40, g.yE);
+    handleSq(g.x1, (yTop + yBot) / 2);
+  }
+}
+function drawDrawings() {
+  if (!S.draws.length && !S.pend && !S.tool) return;
+  if (!S.bb || !S.data) return;
+  const right = L.plotX + L.plotW;
+  ctx.save(); ctx.beginPath(); ctx.rect(L.plotX, L.priceTop, L.plotW, L.priceBottom - L.priceTop); ctx.clip();
+  for (const d of S.draws) {
+    const sel = d === S.sel, g = geomOf(d);
+    if (d.type === 'line') {
+      hseg(Math.max(g.x0, L.plotX), right, g.y, colOf(d), lwOf(d) + (sel ? 0.5 : 0));
+      if (sel) handleDot(g.x0, g.y);
+    } else if (d.type === 'ray') {
+      const e = rayEnd(g);
+      if (e) {
+        ctx.strokeStyle = colOf(d); ctx.lineWidth = lwOf(d) + (sel ? 0.5 : 0);
+        ctx.beginPath(); ctx.moveTo(g.x0, g.y0); ctx.lineTo(e[0], e[1]); ctx.stroke();
+      }
+      if (sel) { handleDot(g.x0, g.y0); handleDot(g.x1, g.y1); }
+    } else drawRR(d, sel);
+  }
+  const m = S.mouse;
+  if (m && inPricePane(m)) {                                              // placement previews
+    ctx.setLineDash([5, 4]); ctx.lineWidth = 1;
+    if (S.pend) {
+      const g = { x0: xOfT(S.pend.t0), y0: pyL(S.pend.p0), x1: m.x, y1: pyL(snapP(priceAt(m.y))) }, e = rayEnd(g);
+      ctx.strokeStyle = DRAW_COL.ray;
+      ctx.beginPath(); ctx.moveTo(g.x0, g.y0); if (e) ctx.lineTo(e[0], e[1]); ctx.stroke();
+    } else if (S.tool === 'line') {
+      ctx.strokeStyle = DRAW_COL.line; const y = Math.round(pyL(snapP(priceAt(m.y)))) + 0.5;
+      ctx.beginPath(); ctx.moveTo(m.x, y); ctx.lineTo(right, y); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+}
+// Price-axis tags for horizontal lines and for the selected risk:reward box.
+function drawDrawingTags() {
+  if (!S.bb || !S.data || !S.draws.length) return;
+  const x = L.plotX + L.plotW, vis = p => { const y = pyL(p); return y >= L.priceTop && y <= L.priceBottom ? y : null; };
+  for (const d of S.draws) {
+    const list = d.type === 'line' ? [[d.p, colOf(d), contrastFg(colOf(d))]]
+      : (d === S.sel && (d.type === 'buy' || d.type === 'sell')) ? [[d.tp, DRAW_COL.tp, '#0b0e14'], [d.sl, DRAW_COL.sl, '#0b0e14'], [d.entry, '#4a4f60', '#fff']] : [];
+    for (const [p, bg, fg] of list) { const y = vis(p); if (y != null) tag(p.toFixed(2), x, y, bg, fg); }
+  }
+}
 
 function setFootprint(on) {
   S.fp = on; $('fp').classList.toggle('on', on);
@@ -1322,6 +1661,8 @@ window.addEventListener('keydown', e => {
   else if (e.key === 'v' || e.key === 'V') setVolumePane(!S.vol);
   else if (e.key === 'c' || e.key === 'C') setCvdPane(!S.cvd);
   else if (e.key === 'r' || e.key === 'R') setReversal(!S.revOn);
+  else if (e.key === 'Escape') { closeStyler(); S.pend = null; S.tool = null; S.sel = null; S.dd = null; updateToolButtons(); render(); }
+  else if (e.key === 'Delete' || e.key === 'Backspace') { if (!stylerOpen()) deleteSelected(); }
   else if (e.key === 'b' || e.key === 'B') setToolbarCollapsed(!$('toolbar').classList.contains('collapsed'));
 });
 // Collapse / expand the top toolbar (the chart canvas is observed, so it re-fits by itself).
@@ -1345,6 +1686,7 @@ function startRecording(secs) {
   const m = /^(\d+)x(\d+)$/.exec(new URLSearchParams(location.search).get('size') || '');
   if (!m) { beginRecording(secs); return; }
   const W = +m[1], H = +m[2], body = document.body;
+  $('tools').style.display = 'none';                       // the drawing panel is not part of the video layout
   document.documentElement.style.overflow = 'hidden';
   body.style.width = W + 'px';
   const chrome = $('toolbar').offsetHeight + $('scrubrow').offsetHeight + $('status').offsetHeight;
