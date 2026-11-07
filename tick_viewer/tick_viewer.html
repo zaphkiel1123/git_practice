@@ -23,6 +23,11 @@
   button.on { background: #2962ff; border-color: #2962ff; color: #fff; }
   button#play { min-width: 74px; }
   #fileinfo { color: #8b8f9a; margin-left: auto; white-space: nowrap; }
+  #tbtoggle { min-width: 26px; padding: 3px 6px; line-height: 1; }
+  /* collapsed: only the toggle button and the file info stay visible */
+  #toolbar.collapsed { flex-wrap: nowrap; padding: 2px 10px; }
+  #toolbar.collapsed > .grp { display: none; }
+  #toolbar.collapsed #fileinfo { margin-left: 0; overflow: hidden; text-overflow: ellipsis; }
   #scrubrow { display: flex; align-items: center; gap: 10px; padding: 4px 10px;
               background: #1e222d; border-bottom: 1px solid #2a2e39; }
   /* The slider has an explicit 16 px thumb so the reversal ticks drawn on #revstrip line up with its value. */
@@ -62,6 +67,7 @@
 </head>
 <body>
 <div id="toolbar">
+  <button id="tbtoggle" title="Collapse / expand the toolbar (B)">&#9650;</button>
   <div class="grp">
     <label for="unit">Bar</label>
     <select id="unit" title="How a candle is formed">
@@ -455,6 +461,7 @@ const SPEEDS = {
 const DEFAULT_SPEED = { rt: 1, rate: 100 };
 const MAX_PER_FRAME = 300000;
 const FP_VIS = 14, CANDLE_VIS = 120;
+const PROFILE_MIN_BAR = 4;                     // narrowest bar (px) that still draws its volume profile when zoomed out
 const SPD_PX = 72;                             // default speed-of-tape pane height
 const CVD_PX = 90;                             // default CVD pane height
 
@@ -753,7 +760,7 @@ function draw() {
   L.pmin = pmin; L.pmax = pmax;
   const rowPx = (L.priceBottom - L.priceTop) * ts / (pmax - pmin);
   // 0 = plain candle, 1 = candle with embedded volume profile, 2 = full footprint (bid x ask numbers)
-  const fpMode = !S.fp ? 0 : (L.barW >= 44 && rowPx >= 8) ? 2 : (L.barW >= 14 ? 1 : 0);
+  const fpMode = !S.fp ? 0 : (L.barW >= 44 && rowPx >= 8) ? 2 : (L.barW >= PROFILE_MIN_BAR ? 1 : 0);
   L.fpMode = fpMode;
   const deltaRow = L.volH >= 70;                // room for a per-bar delta line at the top of the volume pane
   const volScale = L.volH - (deltaRow ? 26 : 4);
@@ -1051,8 +1058,10 @@ function draw() {
 // volume in the bar.  In the wide layout the numbers sit beside the axis, on top of the bars.
 function fpGeom(cx, colW, numbers) {
   const x0 = cx - colW / 2;
-  const zone = numbers ? 8 : Math.max(4, Math.min(9, Math.round(colW * 0.22)));       // candle strip width
-  const fx0 = x0 + zone + 2, fW = colW - zone - 2;                                     // profile area
+  const narrow = !numbers && colW < 14;                                                 // zoomed out: compact profile
+  const zone = numbers ? 8 : narrow ? Math.max(1, Math.round(colW * 0.2)) : Math.max(4, Math.min(9, Math.round(colW * 0.22)));   // candle strip width
+  const gap = narrow ? 1 : 2;
+  const fx0 = x0 + zone + gap, fW = Math.max(2, colW - zone - gap);                    // profile area
   return { x0, zone, spineX: x0 + zone / 2, fx0, fW, axisX: fx0 + fW / 2, half: fW / 2 };
 }
 function candleSpine(cx, cw, o, c, h, l, col, py) {
@@ -1080,10 +1089,10 @@ function drawProfileCandle(fp, cx, colW, o, c, h, l, col, py) {
     const dm = fp.dom[j];
     if (b) { const w = Math.max(1, g.half * b / fp.maxSide); ctx.fillStyle = dm < 0 ? C.sellBar : C.greyBar; ctx.fillRect(g.axisX - w, y1 + 0.5, w, rh); }
     if (a) { const w = Math.max(1, g.half * a / fp.maxSide); ctx.fillStyle = dm > 0 ? C.buyBar : C.greyBar; ctx.fillRect(g.axisX, y1 + 0.5, w, rh); }
-    if (j === fp.poc) { ctx.strokeStyle = 'rgba(245,197,66,.8)'; ctx.lineWidth = 1; ctx.strokeRect(g.fx0 + 0.5, y1 + 0.5, g.fW - 1, rh); }
+    if (j === fp.poc && g.fW >= 8) { ctx.strokeStyle = 'rgba(245,197,66,.8)'; ctx.lineWidth = 1; ctx.strokeRect(g.fx0 + 0.5, y1 + 0.5, g.fW - 1, rh); }
   }
-  profileAxis(g, h, l, py);
-  candleSpine(g.spineX, Math.max(3, Math.round(g.zone * 0.6)), o, c, h, l, col, py);
+  if (g.fW >= 8) profileAxis(g, h, l, py);                  // (too narrow: the bars alone are the profile)
+  candleSpine(g.spineX, g.fW >= 8 ? Math.max(3, Math.round(g.zone * 0.6)) : Math.max(1, g.zone), o, c, h, l, col, py);
 }
 
 // Wide bar: candle | sell number + bar | axis | buy bar + number, one row per price level.  A level with
@@ -1313,7 +1322,16 @@ window.addEventListener('keydown', e => {
   else if (e.key === 'v' || e.key === 'V') setVolumePane(!S.vol);
   else if (e.key === 'c' || e.key === 'C') setCvdPane(!S.cvd);
   else if (e.key === 'r' || e.key === 'R') setReversal(!S.revOn);
+  else if (e.key === 'b' || e.key === 'B') setToolbarCollapsed(!$('toolbar').classList.contains('collapsed'));
 });
+// Collapse / expand the top toolbar (the chart canvas is observed, so it re-fits by itself).
+function setToolbarCollapsed(c) {
+  $('toolbar').classList.toggle('collapsed', c);
+  $('tbtoggle').innerHTML = c ? '&#9660;' : '&#9650;';
+  try { localStorage.setItem('tv_toolbar_collapsed', c ? '1' : '0'); } catch (e) {}
+}
+$('tbtoggle').onclick = () => setToolbarCollapsed(!$('toolbar').classList.contains('collapsed'));
+try { if (localStorage.getItem('tv_toolbar_collapsed') === '1') setToolbarCollapsed(true); } catch (e) {}
 window.addEventListener('resize', resize);
 new ResizeObserver(resize).observe(cv);
 
