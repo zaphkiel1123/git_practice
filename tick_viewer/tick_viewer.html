@@ -161,6 +161,13 @@
     <span id="revinfo" style="color:#8b8f9a"></span>
   </div>
   <div class="grp">
+    <button id="bigbtn" class="on" title="Big trade circles (G): an exact timestamp (ms) with at least this many prints = one player sweeping the book. Green = big buy, red = big sell. The circle sits on the last print of the sweep; hover it to see the start and end level.">Big Trade</button>
+    <label for="bigmin" title="Minimum number of prints sharing one exact timestamp">&ge;</label>
+    <input id="bigmin" type="number" min="2" max="100000" value="150" step="1" style="width:62px"
+           title="Minimum prints at one exact timestamp">
+    <span id="biginfo" style="color:#8b8f9a"></span>
+  </div>
+  <div class="grp">
     <button id="open">Open .data...</button>
     <input id="file" type="file" style="display:none">
   </div>
@@ -503,6 +510,30 @@ function findReversals(data, minTicks) {
   }
   return { minTicks: T, n: ext.length, ext: Int32Array.from(ext), conf: Int32Array.from(conf), dir: Int8Array.from(dir) };
 }
+// Big trades: one player sweeping the book.  All prints that share one exact timestamp (the data's ms resolution)
+// form one group; a group of at least `minTicks` prints is a big trade.
+//   i0[r], i1[r]  first / last print index of the trade (the circle is drawn on the last print)
+// Groups are disjoint and sorted, so i0 and i1 both increase with r.
+function findBigTrades(data, minTicks) {
+  const n = data.n, T = Math.max(2, Math.floor(minTicks)), t = data.t;
+  const i0 = [], i1 = [];
+  for (let s = 0; s < n;) {
+    let e = s + 1;
+    while (e < n && t[e] === t[s]) e++;
+    if (e - s >= T) { i0.push(s); i1.push(e - 1); }
+    s = e;
+  }
+  return { minTicks: T, n: i0.length, i0: Int32Array.from(i0), i1: Int32Array.from(i1) };
+}
+// Summary of prints [a, b] of a trade: side (+1 buy / -1 sell by contracts), contracts, start / end / extreme prices.
+function bigTradeStats(data, a, b) {
+  let bv = 0, sv = 0, lo = Infinity, hi = -Infinity;
+  for (let i = a; i <= b; i++) {
+    if (data.side[i] > 0) bv += data.q[i]; else sv += data.q[i];
+    if (data.p[i] < lo) lo = data.p[i]; if (data.p[i] > hi) hi = data.p[i];
+  }
+  return { side: bv >= sv ? 1 : -1, bv, sv, vol: bv + sv, prints: b - a + 1, pStart: data.p[a], pEnd: data.p[b], lo, hi };
+}
 // ==== CORE END ====
 
 if (typeof document !== 'undefined') (function ui() {
@@ -545,6 +576,7 @@ const P = {
   data: null, name: '',
   pos: 0, playing: false, simTime: 0, acc: 0, lastTs: null, scrubbing: null,
   rev: null, revOn: true, revTicks: 40,      // reversal points on the slider: findReversals() result, on/off, size in ticks
+  big: null, bigOn: true, bigMin: 150,       // big trades (circles on the chart): findBigTrades() result, on/off, min prints at one timestamp
   draws: [],                                 // drawing tools (see "drawing tools" below); stored as time + price, so any bar type can show them
 };
 // Per-window view state: its own bars (bar type), zoom / pan, panes, tool, selection.
@@ -563,6 +595,7 @@ function newState() {
     ySpan: null, yOff: 0, axisDrag: null,      // manual price-scale zoom (ySpan = visible points; null = auto-fit)
     measure: null,                             // shift + drag ruler: { p0 start price, idx0 start bar position, last mouse pos }
     tool: null, sel: null, dd: null, pend: null, cumQ: null,
+    bigHits: [],                               // big-trade circles drawn last frame (for the hover tooltip)
   };
 }
 
@@ -593,6 +626,7 @@ function setData(buf, name) {
   for (const ch of charts) { ch.S.sel = null; ch.S.dd = null; ch.S.pend = null; ch.S.cumQ = null; }
   P.rev = findReversals(data, P.revTicks);
   drawRevStrip();
+  P.big = findBigTrades(data, P.bigMin); updateBigInfo();
   $('fileinfo').textContent = `${name} | ${data.n.toLocaleString()} prints | ${fmtFull(data.t[0])} -> ${fmtFull(data.t[data.n - 1])} ET${warn}`;
   document.title = `${name} - ES Tick Candles`;
   hideMsg();
@@ -710,6 +744,18 @@ $('revticks').addEventListener('input', e => {
   P.revTicks = v;
   if (P.data) P.rev = findReversals(P.data, v);            // one pass over the file, so it is instant
   drawRevStrip();
+});
+
+// ---------- big trade indicator ----------
+function updateBigInfo() { $('biginfo').textContent = P.big ? `${P.big.n} big trade${P.big.n === 1 ? '' : 's'}` : ''; }
+function setBigTrade(on) { P.bigOn = on; $('bigbtn').classList.toggle('on', on); renderAll(); }
+$('bigbtn').onclick = () => setBigTrade(!P.bigOn);
+$('bigmin').addEventListener('input', e => {
+  const v = parseInt(e.target.value, 10);
+  if (!Number.isFinite(v) || v < 2) return;
+  P.bigMin = v;
+  if (P.data) P.big = findBigTrades(P.data, v);
+  updateBigInfo(); renderAll();
 });
 
 function barSpec() {
@@ -1146,6 +1192,31 @@ function draw() {
       ctx.beginPath(); ctx.arc(cx, lastY, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }
   }
+
+  // big trades: a circle on the last print of every sweep (>= P.bigMin prints at one exact timestamp that has been
+  // replayed so far).  Green = net bought at the ask, red = net sold at the bid.  Hover it for the start / end level.
+  S.bigHits = [];
+  const bg = P.bigOn ? P.big : null;
+  if (bg && bg.n && P.pos > 0 && bb.pos > 0) {
+    const D = P.data, last = P.pos - 1, recLo = bb.i0[lo];
+    let a = 0, b = bg.n;                                     // first trade that ends at / after the first visible print
+    while (a < b) { const mid = (a + b) >>> 1; if (bg.i1[mid] < recLo) a = mid + 1; else b = mid; }
+    for (let r = a; r < bg.n; r++) {
+      if (bg.i0[r] + bg.minTicks - 1 > last) break;          // not yet reached the size threshold in the replay
+      const end = Math.min(bg.i1[r], last);
+      let k0 = 0, k1 = count - 1;                            // bar holding the last print: last bar with i0 <= end
+      while (k0 < k1) { const mid = (k0 + k1 + 1) >>> 1; if (bb.i0[mid] <= end) k0 = mid; else k1 = mid - 1; }
+      if (k0 > hi) break;
+      if (k0 < lo) continue;
+      const st = bigTradeStats(D, bg.i0[r], end), buy = st.side > 0;
+      const x = barX(k0), y = py(D.p[end]), rad = 11;
+      const hot = S.mouse && Math.hypot(S.mouse.x - x, S.mouse.y - y) <= rad + 2 && inPricePane(S.mouse);
+      ctx.fillStyle = buy ? `rgba(46,232,106,${hot ? .55 : .32})` : `rgba(255,77,77,${hot ? .55 : .32})`;
+      ctx.strokeStyle = buy ? '#2ee86a' : '#ff4d4d'; ctx.lineWidth = hot ? 2.5 : 1.5;
+      ctx.beginPath(); ctx.arc(x, y, rad, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      S.bigHits.push({ x, y, rad, st, t: D.t[end], r });
+    }
+  }
   ctx.restore();
 
   // crosshair
@@ -1265,6 +1336,38 @@ function draw() {
   seg(`   CVD ${fmtSigned(bb.co[k])} -> ${fmtSigned(bb.cc[k])}`, bb.cc[k] >= bb.co[k] ? C.buy : C.sell);
   if (hoverRow) seg(`     @ ${hoverRow.price.toFixed(2)}  bid ${hoverRow.bid} x ask ${hoverRow.ask}  (vol ${hoverRow.tot}${hoverRow.poc ? ', POC' : ''})`, C.poc);
   ctx.font = `11px ${SANS}`;
+  drawBigTip();
+}
+
+// Hover tooltip of a big-trade circle: which level the sweep started at and which level it ended at.
+function drawBigTip() {
+  const m = S.mouse;
+  let h = null;
+  if (m && inPricePane(m) && !S.drag && !S.measure) {
+    for (const c of S.bigHits) if (Math.hypot(m.x - c.x, m.y - c.y) <= c.rad + 2) h = c;      // later circle = on top
+  }
+  if (!h) return;
+  const st = h.st, buy = st.side > 0, col = buy ? '#2ee86a' : '#ff4d4d', ts = TICK_SIZE;
+  const tk = Math.round((st.pEnd - st.pStart) / ts);
+  const lines = [
+    [`BIG ${buy ? 'BUY' : 'SELL'}`, col, true],
+    [`from ${st.pStart.toFixed(2)}  to  ${st.pEnd.toFixed(2)}  (${tk > 0 ? '+' : ''}${tk} ticks)`, '#ffffff'],
+    [`range ${st.lo.toFixed(2)} - ${st.hi.toFixed(2)}`, C.text],
+    [`${st.prints} prints, ${st.vol} contracts  (ask ${st.bv} / bid ${st.sv})`, C.text],
+    [`at ${fmtHMS(h.t)}.${pad(h.t % 1000, 3)} ET`, C.text],
+  ];
+  ctx.save();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  let w = 0; for (const [txt, , bold] of lines) { ctx.font = `${bold ? 'bold ' : ''}12px ${SANS}`; w = Math.max(w, ctx.measureText(txt).width); }
+  w += 16; const lh = 17, bh = lines.length * lh + 8;
+  let bx = h.x + h.rad + 8, by = h.y - bh / 2;
+  if (bx + w > L.plotX + L.plotW) bx = h.x - h.rad - 8 - w;                         // flip to the left near the right edge
+  bx = Math.max(L.plotX, bx); by = Math.max(L.priceTop, Math.min(L.priceBottom - bh, by));
+  ctx.fillStyle = 'rgba(30,34,45,.96)'; ctx.fillRect(bx, by, w, bh);
+  ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.strokeRect(Math.round(bx) + 0.5, Math.round(by) + 0.5, w - 1, bh - 1);
+  lines.forEach(([txt, c, bold], i) => { ctx.font = `${bold ? 'bold ' : ''}12px ${SANS}`; ctx.fillStyle = c; ctx.fillText(txt, bx + 8, by + 4 + lh * i + lh / 2); });
+  ctx.restore();
+  cv.style.cursor = 'pointer';
 }
 
 // Both footprint renderers share one layout (after the Deepchart reference figure), left to right:
@@ -1957,6 +2060,7 @@ function onKey(e) {
   else if (e.key === 'y' || e.key === 'Y') setVolTable(!S.tbl);
   else if (e.key === 'c' || e.key === 'C') setCvdPane(!S.cvd);
   else if (e.key === 'r' || e.key === 'R') setReversal(!P.revOn);
+  else if (e.key === 'g' || e.key === 'G') setBigTrade(!P.bigOn);
   else if (e.key === 'Escape') { closeStyler(); S.pend = null; S.tool = null; S.sel = null; S.dd = null; updateToolButtons(); render(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { if (!stylerOpen()) deleteSelected(); }
   else if (e.key === 'b' || e.key === 'B') setToolbarCollapsed(!$('toolbar').classList.contains('collapsed'));
