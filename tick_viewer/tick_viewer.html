@@ -559,6 +559,7 @@ function newState() {
     cvd: true, cvdPx: CVD_PX,                  // CVD pane (between speed of tape and volume): on/off, height in px
     spd: true, spdPx: SPD_PX,                  // speed-of-tape pane (between price and volume): on/off, height in px
     spdMin: SPEED_MIN,                         // speed-of-tape threshold: only candles whose peak is above it get a bar
+    yCenter: null, yFrom: null,                // price range frozen while panning in time: absolute centre (null = not frozen) + the state to restore on Follow
     ySpan: null, yOff: 0, axisDrag: null,      // manual price-scale zoom (ySpan = visible points; null = auto-fit)
     measure: null,                             // shift + drag ruler: { p0 start price, idx0 start bar position, last mouse pos }
     tool: null, sel: null, dd: null, pend: null, cumQ: null,
@@ -921,8 +922,13 @@ function draw() {
   let pad_ = (pmax - pmin) * 0.06; if (pad_ < 0.5) pad_ = 0.5;
   pmin -= pad_; pmax += pad_;
   L.autoSpan = pmax - pmin; L.autoCenter = (pmin + pmax) / 2;
-  if (S.ySpan != null) {                       // manual zoom: user-chosen span, still tracks the auto centre
-    const c0 = L.autoCenter + S.yOff;
+  if (S.yCenter != null && S.follow) {         // back to Follow: leave the frozen range
+    if (S.yFrom && !S.yFrom.edited) { S.ySpan = S.yFrom.span; S.yOff = S.yFrom.off; }     // untouched: restore what it was before the pan
+    else S.yOff = S.yCenter - L.autoCenter;                                              // user adjusted it meanwhile: keep that span / position
+    S.yCenter = null; S.yFrom = null;
+  }
+  if (S.ySpan != null) {                       // manual zoom: user-chosen span, still tracks the auto centre (unless frozen by a pan)
+    const c0 = S.yCenter != null ? S.yCenter : L.autoCenter + S.yOff;
     pmin = c0 - S.ySpan / 2; pmax = c0 + S.ySpan / 2;
   }
   const py = p => L.priceTop + (pmax - p) / (pmax - pmin) * (L.priceBottom - L.priceTop);
@@ -1377,15 +1383,27 @@ function onCvMove(e) {
   } else if (S.axisDrag) {                            // drag on the price scale: pan vertically
     const ppp = (L.pmax - L.pmin) / (L.priceBottom - L.priceTop);
     if (S.ySpan == null) S.ySpan = L.pmax - L.pmin;
-    S.yOff = S.axisDrag.yOff + (S.mouse.y - S.axisDrag.y) * ppp;
+    if (S.yCenter != null) { S.yCenter = S.axisDrag.yc + (S.mouse.y - S.axisDrag.y) * ppp; S.yFrom.edited = true; }
+    else S.yOff = S.axisDrag.yOff + (S.mouse.y - S.axisDrag.y) * ppp;
   } else if (S.drag) {                         // drag the chart in any direction: x pans time, y pans price
     const D = S.drag, dx = S.mouse.x - D.x, dy = S.mouse.y - D.y;
     if (Math.abs(dx) > 2) D.xMoved = true;
     if (Math.abs(dy) > 2) D.yMoved = true;
-    if (D.xMoved) { S.viewEnd = D.viewEnd - dx / L.barW; S.follow = false; updateFollowBtn(); }
+    if (D.xMoved) {
+      S.viewEnd = D.viewEnd - dx / L.barW; S.follow = false; updateFollowBtn();
+      if (S.yCenter == null) {                                // panning in time: freeze the price range, so a new high / low entering the view cannot rescale it
+        S.yFrom = { span: S.ySpan, off: S.yOff, edited: false };
+        S.yCenter = (L.pmin + L.pmax) / 2;
+        if (S.ySpan == null) S.ySpan = L.pmax - L.pmin;
+        D.fc = S.yCenter; D.fy = S.mouse.y;                   // vertical drag is applied relative to this point from now on
+      }
+    }
     if (D.yMoved) {
-      if (S.ySpan == null) S.ySpan = D.span0;                 // first vertical move freezes the auto-fit span
-      S.yOff = D.yOff + dy * D.ppp;
+      if (S.yCenter != null) { S.yCenter = D.fc + (S.mouse.y - D.fy) * D.ppp; S.yFrom.edited = true; }
+      else {
+        if (S.ySpan == null) S.ySpan = D.span0;               // first vertical move freezes the auto-fit span
+        S.yOff = D.yOff + dy * D.ppp;
+      }
     }
   }
   render();
@@ -1396,7 +1414,7 @@ function onCvDown(e) {
   const mm = { x: e.clientX - r.left, y: e.clientY - r.top };
   const sp_ = onSplitter(mm);
   if (sp_) { S.splitDrag = sp_; cv.style.cursor = 'row-resize'; return; }
-  if (onPriceScale(mm)) { S.axisDrag = { y: mm.y, yOff: S.yOff }; cv.style.cursor = 'ns-resize'; return; }
+  if (onPriceScale(mm)) { S.axisDrag = { y: mm.y, yOff: S.yOff, yc: S.yCenter }; cv.style.cursor = 'ns-resize'; return; }
   if (e.button === 0 && drawMouseDown(mm)) { e.preventDefault(); renderAll(); return; }   // drawing tools / editing a drawing
   // Shift + left drag in the price pane: measure ticks from the starting point (instead of panning).
   if (e.shiftKey && e.button === 0 && S.bb && Number.isFinite(L.pmax) && mm.x >= L.plotX && mm.x <= L.plotX + L.plotW &&
@@ -1405,7 +1423,7 @@ function onCvDown(e) {
     S.measure = { p0: Math.round(priceAt(mm.y) / TICK_SIZE) * TICK_SIZE, idx0: L.first + (mm.x - L.plotX) / L.barW, last: mm };
     render(); return;
   }
-  S.drag = { x: mm.x, y: mm.y, viewEnd: S.viewEnd, yOff: S.yOff, span0: L.pmax - L.pmin,
+  S.drag = { x: mm.x, y: mm.y, viewEnd: S.viewEnd, yOff: S.yOff, span0: L.pmax - L.pmin, fc: S.yCenter, fy: mm.y,
              ppp: (L.pmax - L.pmin) / (L.priceBottom - L.priceTop), xMoved: false, yMoved: false };
   cv.style.cursor = 'grabbing';
 }
@@ -1427,7 +1445,9 @@ function onCvWheel(e) {
     const span1 = Math.max(2 * TICK_SIZE, Math.min(500, span0 * f));
     const pa = priceAt(my), frac = (L.pmax - pa) / (L.pmax - L.pmin);     // keep the price under the cursor fixed
     const newMax = pa + frac * span1, newCenter = newMax - span1 / 2;
-    S.ySpan = span1; S.yOff = newCenter - L.autoCenter;
+    S.ySpan = span1;
+    if (S.yCenter != null) { S.yCenter = newCenter; S.yFrom.edited = true; }
+    else S.yOff = newCenter - L.autoCenter;
     render(); return;
   }
   const nv = Math.max(4, Math.min(3000, S.vis * f));
@@ -1446,7 +1466,7 @@ function onCvDbl(e) {
   if (S.mouse && drawReady() && (S.tool || hitDraw(S.mouse))) return;                // not on a drawing / while a tool is armed
   const dv_ = onSplitter(S.mouse);                                            // double-click a divider: default height
   if (dv_) { if (dv_ === 'vol') S.volFrac = 0.18; else if (dv_ === 'cvd') S.cvdPx = CVD_PX; else S.spdPx = SPD_PX; render(); return; }
-  if (onPriceScale(S.mouse)) { S.ySpan = null; S.yOff = 0; render(); return; }      // double-click the scale: auto-fit again
+  if (onPriceScale(S.mouse)) { S.ySpan = null; S.yOff = 0; S.yCenter = null; S.yFrom = null; render(); return; }      // double-click the scale: auto-fit again
   S.follow = true; updateFollowBtn(); render();
 }
 
