@@ -211,7 +211,7 @@
  </div>
 </div>
 <div id="styler" style="display:none">
-  <div class="srow"><label for="st_col">Colour</label><input id="st_col" type="color" value="#4aa3ff"><div id="st_sw"></div></div>
+  <div class="srow"><label for="st_col">Colour</label><input id="st_col" type="color" value="#ffffff"><div id="st_sw"></div></div>
   <div class="srow"><label for="st_w">Width</label><input id="st_w" type="range" min="0.5" max="8" step="0.5" value="1.5"><span id="st_wv">1.5</span></div>
   <div class="srow" style="justify-content:flex-end"><button id="st_ok">Done</button></div>
 </div>
@@ -1581,7 +1581,7 @@ function onCvDbl(e) {
 // Every point is stored as real time + price, so a drawing stays put when the bar type / size changes.
 // Time <-> bar position is linear in each bar mode (time bars: ms; tick bars: print index; contracts bars:
 // cumulative contracts), so drawings can also be placed in the not-yet-replayed area to the right.
-const DRAW_COL = { line: '#4aa3ff', ray: '#f5a742', tp: '#26a69a', sl: '#ef5350', entry: '#aab0c0' };
+const DRAW_COL = { line: '#ffffff', ray: '#f5a742', tp: '#26a69a', sl: '#ef5350', entry: '#aab0c0' };
 const HIT = 6;                                               // pixel tolerance for grabbing a line
 let drawId = 0;
 function cumQOf() {
