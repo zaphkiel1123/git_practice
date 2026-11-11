@@ -96,6 +96,40 @@
   #tapebody .r.b { color: #43d65f; } #tapebody .r.s { color: #b47cf5; }
   #tapebody .r:first-child { background: rgba(255,255,255,.08); }
   #tapebody .big { font-weight: 700; }
+  #trade { width: 232px; flex: none; min-width: 0; overflow: hidden; border-left: 1px solid #2a2e39; background: #171b26; display: flex; flex-direction: column;
+           font-size: 12px; }
+  #trade.hide { display: none; }
+  #trhead { padding: 4px 8px; color: #8b8f9a; border-bottom: 1px solid #2a2e39; display: flex; align-items: center;
+            justify-content: space-between; gap: 6px; }
+  #trhead button { padding: 1px 6px; line-height: 1.2; font-size: 12px; }
+  /* collapsed: a thin strip holding only the expand button (the chart re-fits by itself) */
+  #trade.collapsed { width: 26px; }
+  #trade.collapsed #trhead { padding: 4px 2px; justify-content: center; border-bottom: none; }
+  #trade.collapsed #trhead button { min-width: 0; width: 100%; padding: 1px 2px; }   /* the global button { min-width: 30px } is wider than the strip */
+  #trade.collapsed #trhead #trtitle, #trade.collapsed #trbody { display: none; }
+  #trbody { flex: 1; overflow-y: auto; padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; }
+  #trade .trq { font-variant-numeric: tabular-nums; color: #d1d4dc; }
+  #trade .trrow { display: flex; align-items: center; gap: 6px; }
+  #trade .trrow label { color: #8b8f9a; }
+  #trade .trrow input { width: 62px; min-width: 0; padding: 2px 4px; }
+  #trade .trrow2 { display: flex; gap: 6px; }
+  #trade .trrow2 button { flex: 1; min-width: 0; padding: 5px 2px; font-weight: 600; }
+  #trade button.tbuy { background: #1d5f55; border-color: #26a69a; }
+  #trade button.tbuy:hover { background: #26a69a; }
+  #trade button.tsell { background: #7a2e2c; border-color: #ef5350; }
+  #trade button.tsell:hover { background: #ef5350; }
+  #trade .trnote { color: #5d6270; font-size: 11px; }
+  #trade .trmsg { color: #ef5350; min-height: 14px; font-size: 11px; }
+  #trade .trmsg.info { color: #8b8f9a; }
+  #trade .trrow2 button.armed { box-shadow: 0 0 0 2px #fff inset; }
+  #trade .trsec { color: #8b8f9a; text-transform: uppercase; letter-spacing: .06em; font-size: 10px; border-top: 1px solid #2a2e39;
+                  padding-top: 6px; display: flex; align-items: center; justify-content: space-between; }
+  #trade .trmini { padding: 0 6px; font-size: 10px; text-transform: none; letter-spacing: 0; }
+  #trade .trpos { font-variant-numeric: tabular-nums; line-height: 1.5; }
+  #trade .trlist { font: 11px/16px ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace; max-height: 160px; overflow-y: auto; }
+  #trade .trlist .it { display: flex; justify-content: space-between; gap: 6px; white-space: nowrap; }
+  #trade .trlist .it button { padding: 0 5px; font-size: 10px; }
+  #trade .pos { color: #43d65f; } #trade .neg { color: #ef5350; }
   #status { padding: 4px 10px; background: #1e222d; border-top: 1px solid #2a2e39;
             font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden;
             text-overflow: ellipsis; }
@@ -147,6 +181,7 @@
     <button id="go">Go</button>
     <button id="follow" class="on" title="Keep newest bar in view (End)">Follow</button>
     <button id="tapebtn" class="on" title="Time & Sales tape (T)">Tape</button>
+    <button id="tradebtn" class="on" title="Trading panel to the right of the tape (X)">Trade</button>
     <button id="cvdbtn" class="on" title="CVD pane: cumulative volume delta candles, resets 18:00 ET (C)">CVD</button>
     <button id="volbtn" class="on" title="Volume bar pane at the bottom (V)">Volume</button>
     <button id="tblbtn" class="on" title="Volume / delta / %delta table under the volume pane (Y)">Vol Table</button>
@@ -207,6 +242,35 @@
       <div id="help">Drop a <code>.data</code> file here or use "Open .data". All times shown are New York (ET).</div></div>
   </div>
   <div id="tape"><div id="tapehead">Time &amp; Sales (ET)</div><div id="tapebody"></div></div>
+  <div id="trade">
+    <div id="trhead"><span id="trtitle">Trade (simulated replay orders)</span><button id="trcollapse" class="tcollapse" title="Collapse / expand the trading panel">&#187;</button></div>
+    <div id="trbody">
+      <div id="tr_quote" class="trq">no quote yet</div>
+      <div class="trrow"><label for="tr_qty">Qty</label><input id="tr_qty" type="number" min="1" max="1000" step="1" value="1">
+        <span class="trnote">contracts</span></div>
+      <div class="trrow"><label for="tr_tp">TP</label><input id="tr_tp" type="number" min="0" max="100000" step="1" value="20">
+        <label for="tr_sl">SL</label><input id="tr_sl" type="number" min="0" max="100000" step="1" value="20">
+        <span class="trnote">ticks</span></div>
+      <div id="tr_hint" class="trnote"></div>
+      <div class="trrow2"><button id="tr_mbuy" class="tbuy" title="Buy at the best price: the current ask">Buy Mkt</button>
+        <button id="tr_msell" class="tsell" title="Sell at the best price: the current bid">Sell Mkt</button></div>
+      <div class="trnote">Limit / Stop: click the button, move the mouse up / down the chart to the price, click the chart to place it (Esc cancels)</div>
+      <div class="trrow2"><button id="tr_blmt" class="tbuy" title="Buy limit (below the market): click, move to the price on the chart, click again">Buy Limit</button>
+        <button id="tr_slmt" class="tsell" title="Sell limit (above the market): click, move to the price on the chart, click again">Sell Limit</button></div>
+      <div class="trrow2"><button id="tr_bstp" class="tbuy" title="Buy stop (above the market): click, move to the price on the chart, click again">Buy Stop</button>
+        <button id="tr_sstp" class="tsell" title="Sell stop (below the market): click, move to the price on the chart, click again">Sell Stop</button></div>
+      <div id="tr_msg" class="trmsg"></div>
+      <div class="trsec">Position</div>
+      <div id="tr_pos" class="trpos">Flat</div>
+      <div class="trrow2"><button id="tr_close" title="Close the whole position at the best price">Close</button>
+        <button id="tr_apply" title="Set the open position's TP / SL from the TP / SL ticks above (0 removes it). Or drag the TP / SL lines on the chart.">Set TP/SL</button></div>
+      <div class="trsec">Working orders <button id="tr_cancelall" class="trmini" title="Cancel all working orders">cancel all</button></div>
+      <div id="tr_orders" class="trlist"></div>
+      <div class="trsec">Closed trades <button id="tr_clear" class="trmini" title="Clear the closed-trade history and the buy / sell markers on the chart (the open position and working orders stay)">clear history</button></div>
+      <div id="tr_real" class="trpos"></div>
+      <div id="tr_log" class="trlist"></div>
+    </div>
+  </div>
   </div>
  </div>
 </div>
@@ -248,12 +312,13 @@ function parseTicks(buf) {
   const n = Math.floor(buf.byteLength / REC_SIZE);
   const dv = new DataView(buf);
   const t = new Float64Array(n), p = new Float64Array(n), q = new Uint32Array(n), side = new Int8Array(n);
+  const bidA = new Float32Array(n), askA = new Float32Array(n);      // quote at each print (the trading panel fills market orders on it)
   for (let i = 0, o = 0; i < n; i++, o += REC_SIZE) {
     const lo = dv.getUint32(o, true), hi = dv.getInt32(o + 4, true);
     // hi*2^32+lo is exact only to ~6 us at this magnitude; round to ms, the data's resolution.
     t[i] = Math.round((hi * 4294967296 + lo) / 10000) - NET_EPOCH_TO_UNIX_MS;
     const pr = dv.getFloat64(o + 8, true), bid = dv.getFloat64(o + 16, true), ask = dv.getFloat64(o + 24, true);
-    p[i] = pr;
+    p[i] = pr; bidA[i] = bid; askA[i] = ask;
     q[i] = dv.getUint32(o + 32, true);
     side[i] = pr === ask ? 1 : pr === bid ? -1 : (pr >= (bid + ask) / 2 ? 1 : -1);
   }
@@ -267,7 +332,7 @@ function parseTicks(buf) {
     while (t[j] <= t[i] - SPEED_WINDOW_MS) j++;
     spd[i] = i - j + 1;
   }
-  return { n, t, p, q, side, spd, trailing: buf.byteLength - n * REC_SIZE, sorted };
+  return { n, t, p, q, side, spd, bid: bidA, ask: askA, trailing: buf.byteLength - n * REC_SIZE, sorted };
 }
 
 // Builds bars incrementally, one print at a time.
@@ -534,6 +599,147 @@ function bigTradeStats(data, a, b) {
   }
   return { side: bv >= sv ? 1 : -1, bv, sv, vol: bv + sv, prints: b - a + 1, pStart: data.p[a], pEnd: data.p[b], lo, hi };
 }
+
+// ---------- trade simulator (the trading panel) ----------
+// One net position (signed contracts) with ONE take-profit and ONE stop-loss for the whole position (OCO: whichever is
+// touched first closes everything), plus any number of pending entry orders.  It is driven by the replay: advance(from, to)
+// walks the prints [from, to) in order.  Fill rules (trade price p of each print):
+//   market            immediately, at the best price: buy at the ask, sell at the bid of the last print shown
+//   limit  buy / sell fills when p <= price / p >= price, at the limit price
+//   stop   buy / sell fills when p >= price / p <= price, at the print price (stops slip through gaps)
+//   TP     long: p >= tp, fills at tp;  short: p <= tp
+//   SL     long: p <= sl, fills at p;   short: p >= sl
+// A fill in the direction of the position adds to it (average price); a fill against it reduces it, and a fill larger
+// than the position reverses it.  An exit never fires on the print that opened / changed the position.
+const TICK_VALUE = 12.5;                       // ES: $12.50 per 0.25 tick
+class TradeSim {
+  constructor(data) { this.d = data; this.reset(); }
+  reset() {
+    this.net = 0; this.avg = 0; this.tp = null; this.sl = null; this.openT = 0;
+    this.orders = [];                          // pending entry orders: { id, side, type 'limit'|'stop', price, qty, tpTk, slTk }
+    this.log = [];                             // closed trades (every partial close too), oldest first
+    this.fills = [];                           // every execution, for the chart markers
+    this.realized = 0;                         // realised P&L in $
+    this.nextId = 1; this.ver = 0; this.entryI = -1;
+    this.done = 0;                             // highest print count already walked by advance()
+  }
+  // Quote at print count `pos` (the last print shown); null before the first print.
+  quote(pos) {
+    if (!this.d || pos <= 0) return null;
+    const i = Math.min(pos, this.d.n) - 1, d = this.d;
+    let bid = d.bid ? d.bid[i] : 0, ask = d.ask ? d.ask[i] : 0;
+    if (!(bid > 0) || !(ask > 0) || ask < bid) bid = ask = d.p[i];
+    return { bid, ask, last: d.p[i], t: d.t[i], i };
+  }
+  _fill(side, qty, price, i, why, tpTk, slTk) {
+    const ts = TICK_SIZE, d = this.d, prev = this.net;
+    this.fills.push({ t: d.t[i], side, price, qty, why, open: prev === 0 || Math.sign(prev) === side });   // open: enters / adds, else exits
+    if (prev === 0 || Math.sign(prev) === side) {                       // open / add
+      const nn = Math.abs(prev) + qty;
+      this.avg = (Math.abs(prev) * this.avg + qty * price) / nn;
+      this.net = side * nn;
+      if (prev === 0) { this.openT = d.t[i]; this.tp = this.sl = null; }
+      if (tpTk > 0 && this.tp == null) this.tp = this.avg + side * tpTk * ts;
+      if (slTk > 0 && this.sl == null) this.sl = this.avg - side * slTk * ts;
+    } else {                                                              // reduce / reverse
+      const ps = Math.sign(prev), closeQ = Math.min(qty, Math.abs(prev));
+      const ticks = (price - this.avg) * ps / ts, usd = ticks * closeQ * TICK_VALUE;
+      this.realized += usd;
+      this.log.push({ side: ps, qty: closeQ, entry: this.avg, exit: price, ticks, usd, why, tIn: this.openT, tOut: d.t[i] });
+      this.net = prev + side * qty;
+      if (this.net === 0) { this.avg = 0; this.tp = this.sl = null; }
+      else if (Math.sign(this.net) !== ps) {                              // reversed: the rest opens a new position at this price
+        this.avg = price; this.openT = d.t[i]; this.tp = this.sl = null;
+        if (tpTk > 0) this.tp = price + side * tpTk * ts;
+        if (slTk > 0) this.sl = price - side * slTk * ts;
+      }
+    }
+    this.entryI = i; this.ver++;
+  }
+  market(side, qty, tpTk, slTk, pos) {
+    const q = this.quote(pos);
+    if (!q) return { ok: false, msg: 'No quote yet: step the replay forward first' };
+    this._fill(side, qty, side > 0 ? q.ask : q.bid, q.i, 'MKT', tpTk, slTk);
+    return { ok: true };
+  }
+  // Is a pending order of this side / type at this price allowed right now?  (A limit through the market or a stop on the
+  // wrong side would fill at once: use a market order for that.)  Returns { ok, msg, price (snapped to the tick) }.
+  validate(side, type, price, pos) {
+    const q = this.quote(pos);
+    if (!q) return { ok: false, msg: 'No quote yet: step the replay forward first' };
+    if (!Number.isFinite(price)) return { ok: false, msg: 'Enter a price' };
+    price = Math.round(price / TICK_SIZE) * TICK_SIZE;
+    const nm = (side > 0 ? 'Buy ' : 'Sell ') + type;
+    if (type === 'limit') {
+      if (side > 0 && price >= q.ask) return { ok: false, price, msg: `${nm} must be below the ask ${q.ask.toFixed(2)} (use Market)` };
+      if (side < 0 && price <= q.bid) return { ok: false, price, msg: `${nm} must be above the bid ${q.bid.toFixed(2)} (use Market)` };
+    } else {
+      if (side > 0 && price <= q.ask) return { ok: false, price, msg: `${nm} must be above the ask ${q.ask.toFixed(2)}` };
+      if (side < 0 && price >= q.bid) return { ok: false, price, msg: `${nm} must be below the bid ${q.bid.toFixed(2)}` };
+    }
+    return { ok: true, price };
+  }
+  place(side, type, price, qty, tpTk, slTk, pos) {
+    const v = this.validate(side, type, price, pos);
+    if (!v.ok) return v;
+    this.orders.push({ id: this.nextId++, side, type, price: v.price, qty, tpTk, slTk });
+    this.ver++;
+    return { ok: true };
+  }
+  // Forget the closed trades and the execution markers (the open position and working orders stay).
+  clearHistory() { this.log = []; this.fills = []; this.realized = 0; this.ver++; }
+  cancel(id) { const n = this.orders.length; this.orders = this.orders.filter(o => o.id !== id); if (this.orders.length !== n) this.ver++; }
+  cancelAll() { if (this.orders.length) { this.orders = []; this.ver++; } }
+  flatten(pos) {
+    if (this.net === 0) return { ok: false, msg: 'No open position' };
+    return this.market(-Math.sign(this.net), Math.abs(this.net), 0, 0, pos);
+  }
+  // Move the TP / SL of the open position (chart drag).  TP and SL keep at least one tick between them.
+  setExit(kind, price) {
+    if (this.net === 0) return;
+    const ts = TICK_SIZE, long = this.net > 0;
+    price = Math.round(price / ts) * ts;
+    if (kind === 'tp') this.tp = this.sl == null ? price : (long ? Math.max(price, this.sl + ts) : Math.min(price, this.sl - ts));
+    else this.sl = this.tp == null ? price : (long ? Math.min(price, this.tp - ts) : Math.max(price, this.tp + ts));
+    this.ver++;
+  }
+  // Set the TP / SL of the open position `ticks` away from the average price (0 removes it).
+  setExitTicks(kind, ticks) {
+    if (this.net === 0) return;
+    const dir = Math.sign(this.net) * (kind === 'tp' ? 1 : -1);
+    const v = ticks > 0 ? this.avg + dir * ticks * TICK_SIZE : null;
+    if (kind === 'tp') this.tp = v; else this.sl = v;
+    this.ver++;
+  }
+  // Process the prints [from, to) that the replay just revealed.
+  advance(from, to) {
+    const p = this.d.p;
+    to = Math.min(to, this.d.n);
+    from = Math.max(from, this.done);          // never walk prints twice: stepping back and forward again must not re-trigger orders
+    this.done = Math.max(this.done, to);
+    for (let i = Math.max(0, from); i < to; i++) {
+      if (!this.orders.length && (this.net === 0 || (this.tp == null && this.sl == null))) return;
+      const pr = p[i];
+      for (let k = 0; k < this.orders.length; k++) {
+        const o = this.orders[k]; let fp = null;
+        if (o.type === 'limit') { if (o.side > 0 ? pr <= o.price : pr >= o.price) fp = o.price; }
+        else if (o.side > 0 ? pr >= o.price : pr <= o.price) fp = pr;
+        if (fp != null) { this.orders.splice(k--, 1); this._fill(o.side, o.qty, fp, i, o.type === 'limit' ? 'LMT' : 'STP', o.tpTk, o.slTk); }
+      }
+      if (this.net !== 0 && this.entryI !== i) {
+        const long = this.net > 0, side = long ? -1 : 1, q = Math.abs(this.net);
+        if (this.sl != null && (long ? pr <= this.sl : pr >= this.sl)) this._fill(side, q, pr, i, 'SL', 0, 0);
+        else if (this.tp != null && (long ? pr >= this.tp : pr <= this.tp)) this._fill(side, q, this.tp, i, 'TP', 0, 0);
+      }
+    }
+  }
+  unreal(pos) {                                // open P&L at the last print: { ticks per contract, usd }
+    const q = this.quote(pos);
+    if (!q || this.net === 0) return { ticks: 0, usd: 0 };
+    const ticks = (q.last - this.avg) * Math.sign(this.net) / TICK_SIZE;
+    return { ticks, usd: ticks * Math.abs(this.net) * TICK_VALUE };
+  }
+}
 // ==== CORE END ====
 
 if (typeof document !== 'undefined') (function ui() {
@@ -577,6 +783,8 @@ const P = {
   pos: 0, playing: false, simTime: 0, acc: 0, lastTs: null, scrubbing: null,
   rev: null, revOn: true, revTicks: 40,      // reversal points on the slider: findReversals() result, on/off, size in ticks
   big: null, bigOn: true, bigMin: 150,       // big trades (circles on the chart): findBigTrades() result, on/off, min prints at one timestamp
+  arm: null,                                 // limit / stop order being placed: { side, type }; the next chart click sets its price
+  trade: null,                               // TradeSim of the loaded file (trading panel): position, TP / SL, orders
   draws: [],                                 // drawing tools (see "drawing tools" below); stored as time + price, so any bar type can show them
 };
 // Per-window view state: its own bars (bar type), zoom / pan, panes, tool, selection.
@@ -595,6 +803,7 @@ function newState() {
     ySpan: null, yOff: 0, axisDrag: null,      // manual price-scale zoom (ySpan = visible points; null = auto-fit)
     measure: null,                             // shift + drag ruler: { p0 start price, idx0 start bar position, last mouse pos }
     tool: null, sel: null, dd: null, pend: null, cumQ: null,
+    td: null,                                  // dragging the TP / SL line of the open trade: { kind: 'tp' | 'sl' }
     bigHits: [],                               // big-trade circles drawn last frame (for the hover tooltip)
   };
 }
@@ -623,7 +832,8 @@ function setData(buf, name) {
   if (y < 2000 || y > 2100) warn += ` | WARNING: odd year ${y}, file layout may differ`;
   P.data = data; P.name = name; lastTapeKey = '';
   P.draws = [];                                                                // drawings belong to the previous file
-  for (const ch of charts) { ch.S.sel = null; ch.S.dd = null; ch.S.pend = null; ch.S.cumQ = null; }
+  for (const ch of charts) { ch.S.sel = null; ch.S.dd = null; ch.S.pend = null; ch.S.cumQ = null; ch.S.td = null; }
+  trReset(data);                                                               // so do the position and orders
   P.rev = findReversals(data, P.revTicks);
   drawRevStrip();
   P.big = findBigTrades(data, P.bigMin); updateBigInfo();
@@ -793,13 +1003,14 @@ function stepTicks(k) {
   if (!P.data) return;
   if (k < 0) { seek(P.pos + k); return; }
   const to = Math.min(P.data.n, P.pos + k);
-  syncBars(to); P.pos = to; syncSim(); renderAll();
+  syncBars(to); if (P.trade) P.trade.advance(P.pos, to); P.pos = to; syncSim(); renderAll();
 }
 // One bar of the given window (default: the main one); the other windows follow to the same print.
 function stepBar(ch = charts[0]) {
   if (!P.data) return;
   const bb = ch.S.bb, nb0 = bb.nb;
   while (bb.pos < P.data.n && bb.nb === nb0) bb.add(bb.pos++);
+  if (P.trade) P.trade.advance(P.pos, bb.pos);
   P.pos = bb.pos; syncBars(P.pos); syncSim(); renderAll();
 }
 
@@ -839,7 +1050,7 @@ function frame(ts) {
     const k = Math.floor(P.acc); P.acc -= k;
     target = Math.min(d.n, P.pos + Math.min(k, MAX_PER_FRAME));
   }
-  if (target > P.pos) { syncBars(target); P.pos = target; if ($('mode').value !== 'rt') P.simTime = d.t[P.pos - 1]; }
+  if (target > P.pos) { syncBars(target); if (P.trade) P.trade.advance(P.pos, target); P.pos = target; if ($('mode').value !== 'rt') P.simTime = d.t[P.pos - 1]; }
   eachChart(() => S.bb.closeTo(P.simTime));    // time bars close on the clock, even in a quiet interval
   renderAll();
   if (P.pos >= d.n) { setPlaying(false); return; }
@@ -890,7 +1101,7 @@ function resize() {
 }
 function render() {
   const ch = cur;
-  if (ch === charts[0]) { updateStatus(); updateTape(); }          // status bar and tape belong to the main window
+  if (ch === charts[0]) { updateStatus(); updateTape(); updateTradePanel(); }          // status bar and tape belong to the main window
   if (!ch.raf) ch.raf = ch.win.requestAnimationFrame(() => {      // each window paints on its own frame clock
     ch.raf = 0;
     if (!charts.includes(ch)) return;
@@ -1254,6 +1465,7 @@ function draw() {
   }
 
   drawDrawings();
+  drawTrading();
 
   // Measure ruler (shift + drag): box from the start point to the cursor, labelled with the price distance in ticks.
   // The start stays on its price / bar as the chart moves; the end follows the cursor, snapped to the 0.25 tick grid.
@@ -1302,6 +1514,7 @@ function draw() {
   tag(lastP.toFixed(2), L.plotX + L.plotW, lastY, lastSide >= 0 ? '#2a9d46' : '#7e45c2', '#fff');
   if (chPrice != null) tag(chPrice.toFixed(2), L.plotX + L.plotW, py(chPrice), '#4a4f60', '#fff');
   drawDrawingTags();
+  drawTradingTags();
   if (S.spd) {                                   // speed-of-tape scale: pane top, the threshold, and the live value
     ctx.fillStyle = C.text; ctx.textAlign = 'left';
     ctx.fillText(fmtSpeed(spdTopV), L.plotX + L.plotW + 6, spdY0 + 6);
@@ -1492,9 +1705,10 @@ function priceAt(y) { return L.pmax - (y - L.priceTop) / (L.priceBottom - L.pric
 function onCvMove(e) {
   const r = cv.getBoundingClientRect(); S.mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
   if (S.measure) S.measure.last = S.mouse;
+  if (S.td) { dragTrade(S.mouse); cv.style.cursor = 'ns-resize'; renderAll(); return; }              // dragging the TP / SL of the open trade
   if (S.dd) { dragDraw(S.mouse); cv.style.cursor = 'move'; renderAll(); return; }          // drawings are shared: redraw every window (editing a drawing)
   if (!S.drag && !S.axisDrag) cv.style.cursor = (S.splitDrag || onSplitter(S.mouse)) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize'
-    : (!S.tool && hitDraw(S.mouse)) ? 'move' : 'crosshair';
+    : (!S.tool && !S.pend && hitTrade(S.mouse)) ? 'ns-resize' : (!S.tool && hitDraw(S.mouse)) ? 'move' : 'crosshair';
   if (S.splitDrag === 'vol') {                 // drag a divider: resize the pane below it
     const h = L.volBottom - (S.mouse.y + 3);
     S.volFrac = Math.max(36 / L.availH, Math.min(0.7, h / L.availH));
@@ -1537,22 +1751,25 @@ function onCvDown(e) {
   const sp_ = onSplitter(mm);
   if (sp_) { S.splitDrag = sp_; cv.style.cursor = 'row-resize'; return; }
   if (onPriceScale(mm)) { S.axisDrag = { y: mm.y, yOff: S.yOff, yc: S.yCenter }; cv.style.cursor = 'ns-resize'; return; }
-  if (e.button === 0 && drawMouseDown(mm)) { e.preventDefault(); renderAll(); return; }   // drawing tools / editing a drawing
+  const armedHere = !!P.arm && e.button === 0 && inPricePane(mm);          // armed limit / stop: a click (not a drag) in the price pane places it
+  if (e.button === 0 && !S.tool && !S.pend && !armedHere) { const th = hitTrade(mm); if (th) { S.td = th; e.preventDefault(); cv.style.cursor = 'ns-resize'; return; } }   // grab the TP / SL line
+  if (e.button === 0 && !armedHere && drawMouseDown(mm)) { e.preventDefault(); renderAll(); return; }   // drawing tools / editing a drawing
   // Shift + left drag in the price pane: measure ticks from the starting point (instead of panning).
-  if (e.shiftKey && e.button === 0 && S.bb && Number.isFinite(L.pmax) && mm.x >= L.plotX && mm.x <= L.plotX + L.plotW &&
+  if (e.shiftKey && e.button === 0 && !armedHere && S.bb && Number.isFinite(L.pmax) && mm.x >= L.plotX && mm.x <= L.plotX + L.plotW &&
       mm.y >= L.priceTop && mm.y <= L.priceBottom) {
     e.preventDefault();                                       // no text selection while dragging
     S.measure = { p0: Math.round(priceAt(mm.y) / TICK_SIZE) * TICK_SIZE, idx0: L.first + (mm.x - L.plotX) / L.barW, last: mm };
     render(); return;
   }
   S.drag = { x: mm.x, y: mm.y, viewEnd: S.viewEnd, yOff: S.yOff, span0: L.pmax - L.pmin, fc: S.yCenter, fy: mm.y,
-             ppp: (L.pmax - L.pmin) / (L.priceBottom - L.priceTop), xMoved: false, yMoved: false };
-  cv.style.cursor = 'grabbing';
+             ppp: (L.pmax - L.pmin) / (L.priceBottom - L.priceTop), xMoved: false, yMoved: false, arm: armedHere };
+  cv.style.cursor = armedHere ? 'crosshair' : 'grabbing';
 }
 function onWinMouseUp() {
   eachChart(() => {
     drawMouseUp();
-    S.drag = null; S.axisDrag = null; S.splitDrag = null; S.measure = null;
+    if (S.drag && S.drag.arm && !S.drag.xMoved && !S.drag.yMoved && S.mouse && P.arm) placeArmed(S.mouse);   // click, not a pan
+    S.drag = null; S.axisDrag = null; S.splitDrag = null; S.measure = null; S.td = null;
     cv.style.cursor = onSplitter(S.mouse) ? 'row-resize' : onPriceScale(S.mouse) ? 'ns-resize' : 'crosshair';
   });
   renderAll();
@@ -1777,6 +1994,7 @@ function setTool(t) {
   S.tool = (t === 'select' || t === S.tool) ? null : t;
   S.pend = null; S.dd = null;
   if (S.tool) S.sel = null;
+  if (S.tool && P.arm) disarmOrder();                                   // a drawing tool and a limit / stop being placed exclude each other
   updateToolButtons(); render();
 }
 // Drawings are shared by all windows: removing one clears it from every window's selection too.
@@ -2009,6 +2227,229 @@ function drawDrawingTags() {
   }
 }
 
+// ---------- trading panel (right of the tape) ----------
+// Simulated orders against the replayed prints (rules in TradeSim).  The position, its TP / SL and the working orders
+// are drawn in every window; drag the TP / SL lines on the chart to move them.
+const TR_BUY = '#43d65f', TR_SELL = '#ef5350', TR_ENTRY = '#aab0c0';      // buy green / sell red
+const TR_LINE = 0.3;                                                       // entry / TP / SL / order lines are this fraction of the plot width long, ending at the right edge (0% gap)
+function trReset(data) {
+  P.trade = data ? new TradeSim(data) : null;
+  trKey = ''; trVer = -1;
+  P.arm = null; updateArmButtons();
+  trMsg('');
+  updateTradePanel();
+}
+function pillL(txt, x, y, bg, fg) {                                       // label whose left edge is at x
+  ctx.font = `bold 11px ${SANS}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const w = Math.round(ctx.measureText(txt).width + 12);
+  ctx.fillStyle = bg; ctx.fillRect(Math.round(x), Math.round(y - 8), w, 16);
+  ctx.fillStyle = fg; ctx.fillText(txt, Math.round(x) + 6, Math.round(y) + 0.5);
+  return w;
+}
+function pillR(txt, xr, y, bg, fg) {                                      // label whose right edge is at xr
+  ctx.font = `bold 11px ${SANS}`;
+  const w = Math.round(ctx.measureText(txt).width + 12);
+  pillL(txt, xr - w, y, bg, fg);
+}
+const fmtUsd = v => (v >= 0 ? '+$' : '-$') + Math.abs(v).toFixed(2);
+const fmtTk = v => (v >= 0 ? '+' : '') + (Math.abs(v - Math.round(v)) < 0.05 ? String(Math.round(v)) : v.toFixed(1));
+function tpslInfo(TR, price) {                                            // ticks and $ of an exit price relative to the average entry
+  const tk = (price - TR.avg) * Math.sign(TR.net) / TICK_SIZE;
+  return { tk, usd: tk * Math.abs(TR.net) * TICK_VALUE };
+}
+function drawTrading() {
+  const TR = P.trade;
+  if (!TR || !S.bb || !P.data || !Number.isFinite(L.pmax) || !Number.isFinite(L.first) || L.barW <= 0) return;
+  const right = L.plotX + L.plotW;
+  ctx.save(); ctx.beginPath(); ctx.rect(L.plotX, L.priceTop, L.plotW, L.priceBottom - L.priceTop); ctx.clip();
+  const xEnd = right, xStart = right - TR_LINE * L.plotW;
+  for (const f of TR.fills) {                  // execution markers: right-pointing = entered (tip on the fill); up = bought to exit, down = sold to exit
+    const x = xOfT(f.t), y = pyL(f.price);
+    if (x < L.plotX - 12 || x > right + 12) continue;
+    ctx.fillStyle = f.side > 0 ? TR_BUY : TR_SELL; ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (f.open) { ctx.moveTo(x, y); ctx.lineTo(x - 11, y - 6); ctx.lineTo(x - 11, y + 6); }
+    else { const dy = f.side > 0 ? 10 : -10; ctx.moveTo(x, y); ctx.lineTo(x - 6, y + dy); ctx.lineTo(x + 6, y + dy); }
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  }
+  if (TR.net !== 0) {
+    const sgn = Math.sign(TR.net), q = Math.abs(TR.net), yE = pyL(TR.avg), un = TR.unreal(P.pos);
+    if (TR.tp != null) { const y = pyL(TR.tp); ctx.fillStyle = 'rgba(38,166,154,.12)'; ctx.fillRect(xStart, Math.min(y, yE), xEnd - xStart, Math.abs(yE - y)); }
+    if (TR.sl != null) { const y = pyL(TR.sl); ctx.fillStyle = 'rgba(239,83,80,.12)'; ctx.fillRect(xStart, Math.min(y, yE), xEnd - xStart, Math.abs(yE - y)); }
+    hseg(xStart, xEnd, yE, TR_ENTRY, 1, [4, 3]);
+    pillL(`${sgn > 0 ? 'LONG' : 'SHORT'} ${q} @ ${TR.avg.toFixed(2)}   ${fmtTk(un.ticks)} tk  ${fmtUsd(un.usd)}`, xStart + 8, yE,
+          un.usd >= 0 ? '#2a9d46' : '#c0392b', '#fff');
+    for (const [kind, price, col] of [['tp', TR.tp, DRAW_COL.tp], ['sl', TR.sl, DRAW_COL.sl]]) {
+      if (price == null) continue;
+      const y = pyL(price), inf = tpslInfo(TR, price);
+      hseg(xStart, xEnd, y, col, 2);
+      pillL(`${kind.toUpperCase()} ${price.toFixed(2)}   ${fmtTk(inf.tk)} tk  ${fmtUsd(inf.usd)}`, xStart + 8, y + (Math.abs(y - yE) < 18 ? (y < yE ? -17 : 17) : 0), col, '#0b0e14');
+      handleSq(xEnd - 24, y);
+    }
+  }
+  const pv = armPreview();                                                // limit / stop being placed: follows the mouse
+  if (pv) {
+    const y = pyL(pv.p), a = P.arm;
+    hseg(L.plotX, right, y, pv.col, 1.5, [6, 4]);
+    pillR(pv.v.ok ? `${a.side > 0 ? 'BUY' : 'SELL'} ${a.type === 'limit' ? 'LMT' : 'STP'} ${trInt('tr_qty', 1)} @ ${pv.p.toFixed(2)}  - click to place` : pv.v.msg,
+          right - 30, y - 12, pv.col, '#0b0e14');
+  }
+  for (const o of TR.orders) {                                            // working entry orders
+    const y = pyL(o.price), col = o.side > 0 ? TR_BUY : TR_SELL;
+    hseg(xStart, xEnd, y, col, 1.2, [6, 4]);
+    pillR(`${o.side > 0 ? 'BUY' : 'SELL'} ${o.type === 'limit' ? 'LMT' : 'STP'} ${o.qty} @ ${o.price.toFixed(2)}` +
+          (o.tpTk || o.slTk ? `  TP ${o.tpTk || '-'} SL ${o.slTk || '-'}` : ''), xStart - 6, y, col, '#0b0e14');
+  }
+  ctx.restore();
+}
+function armPreview() {                                                    // { p price, v validation, col } for the order being placed, or null
+  const TR = P.trade, m = S.mouse;
+  if (!P.arm || !TR || !m || !inPricePane(m)) return null;
+  const p = snapP(priceAt(m.y)), v = TR.validate(P.arm.side, P.arm.type, p, P.pos);
+  return { p, v, col: v.ok ? (P.arm.side > 0 ? TR_BUY : TR_SELL) : '#ef5350' };
+}
+function drawTradingTags() {                                              // price-axis tags of the position and the working orders
+  const TR = P.trade;
+  if (!TR || !S.bb || !P.data || !Number.isFinite(L.pmax)) return;
+  const x = L.plotX + L.plotW, list = [];
+  if (TR.net !== 0) {
+    list.push([TR.avg, '#4a4f60', '#fff']);
+    if (TR.tp != null) list.push([TR.tp, DRAW_COL.tp, '#0b0e14']);
+    if (TR.sl != null) list.push([TR.sl, DRAW_COL.sl, '#0b0e14']);
+  }
+  for (const o of TR.orders) list.push([o.price, o.side > 0 ? TR_BUY : TR_SELL, '#0b0e14']);
+  const pv = armPreview(); if (pv) list.push([pv.p, pv.col, '#0b0e14']);
+  ctx.font = `11px ${SANS}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  for (const [p, bg, fg] of list) { const y = pyL(p); if (y >= L.priceTop && y <= L.priceBottom) tag(p.toFixed(2), x, y, bg, fg); }
+}
+// The TP / SL line of the open trade under the mouse (price pane only), or null.
+function hitTrade(m) {
+  const TR = P.trade;
+  if (!TR || TR.net === 0 || !m || !drawReady() || !inPricePane(m) || m.x < L.plotX + (1 - TR_LINE) * L.plotW - HIT) return null;   // only where the line is drawn
+  let best = null, bd = HIT + 1;
+  for (const [kind, price] of [['tp', TR.tp], ['sl', TR.sl]]) {
+    if (price == null) continue;
+    const dd = Math.abs(m.y - pyL(price));
+    if (dd < bd) { bd = dd; best = { kind }; }
+  }
+  return best;
+}
+function dragTrade(m) {
+  const TR = P.trade; if (!TR || !S.td) return;
+  const p = snapP(priceAt(m.y));
+  if (Number.isFinite(p)) TR.setExit(S.td.kind, p);
+}
+
+let trKey = '', trVer = -1;
+const trEsc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const trInt = (id, min) => Math.max(min, parseInt($(id).value, 10) || 0);
+function trMsg(s, info) { const el = $('tr_msg'); el.textContent = s || ''; el.classList.toggle('info', !!info); }
+function updateTrHint() {
+  const tp = trInt('tr_tp', 0), sl = trInt('tr_sl', 0), f = k => `${k} tk = ${(k * TICK_SIZE).toFixed(2)} pt = $${(k * TICK_VALUE).toFixed(2)}`;
+  $('tr_hint').textContent = `per contract:  TP ${tp ? f(tp) : 'none'}  |  SL ${sl ? f(sl) : 'none'}`;
+}
+function updateTradePanel() {
+  const TR = P.trade;
+  const key = TR ? TR.ver + ':' + P.pos : 'none';
+  if (key === trKey) return;
+  trKey = key;
+  if (!TR) { trVer = -1; $('tr_quote').textContent = 'no data loaded'; $('tr_pos').textContent = 'Flat'; $('tr_orders').innerHTML = ''; $('tr_log').innerHTML = ''; $('tr_real').textContent = ''; updateTrHint(); return; }
+  const q = TR.quote(P.pos);
+  $('tr_quote').innerHTML = q ? `Bid <b>${q.bid.toFixed(2)}</b> &nbsp; Ask <b>${q.ask.toFixed(2)}</b> &nbsp; Last <b>${q.last.toFixed(2)}</b>` : 'no quote yet: step the replay';
+  updateTrHint();
+  const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
+  if (TR.net === 0) $('tr_pos').textContent = 'Flat';
+  else {
+    const sgn = Math.sign(TR.net), un = TR.unreal(P.pos);
+    const ex = (name, price) => price == null ? `${name} -` : (() => { const i = tpslInfo(TR, price); return `${name} ${price.toFixed(2)} (<span class="${cls(i.tk)}">${fmtTk(i.tk)} tk ${fmtUsd(i.usd)}</span>)`; })();
+    $('tr_pos').innerHTML = `<b class="${sgn > 0 ? 'pos' : 'neg'}">${sgn > 0 ? 'LONG' : 'SHORT'} ${Math.abs(TR.net)}</b> @ ${TR.avg.toFixed(2)}<br>` +
+      `Open P&amp;L <span class="${cls(un.usd)}">${fmtTk(un.ticks)} tk &nbsp;${fmtUsd(un.usd)}</span><br>${ex('TP', TR.tp)}<br>${ex('SL', TR.sl)}`;
+  }
+  if (TR.ver === trVer) return;                 // orders / closed trades only change when the simulator does
+  trVer = TR.ver;
+  $('tr_orders').innerHTML = TR.orders.length ? TR.orders.map(o =>
+    `<div class="it"><span class="${o.side > 0 ? 'pos' : 'neg'}">${o.side > 0 ? 'BUY' : 'SELL'} ${o.type === 'limit' ? 'LMT' : 'STP'} ${o.qty} @ ${o.price.toFixed(2)}` +
+    `${o.tpTk || o.slTk ? ` <span class="trnote">tp ${o.tpTk || '-'} sl ${o.slTk || '-'}</span>` : ''}</span>` +
+    `<button data-cancel="${o.id}" title="Cancel this order">x</button></div>`).join('') : '<span class="trnote">none</span>';
+  const wins = TR.log.filter(t => t.usd > 0).length;
+  $('tr_real').innerHTML = TR.log.length ? `Realized <b class="${cls(TR.realized)}">${fmtUsd(TR.realized)}</b> &nbsp;(${TR.log.length} closes, ${wins} wins)` : '<span class="trnote">no closed trades yet</span>';
+  let h = '';
+  for (let i = TR.log.length - 1, c = 0; i >= 0 && c < 40; i--, c++) {
+    const t = TR.log[i];
+    h += `<div class="it"><span>${fmtHMS(t.tOut)} ${t.side > 0 ? 'L' : 'S'}${t.qty} ${t.entry.toFixed(2)}&gt;${t.exit.toFixed(2)} <span class="trnote">${trEsc(t.why)}</span></span>` +
+         `<span class="${cls(t.usd)}">${fmtTk(t.ticks)}tk ${fmtUsd(t.usd)}</span></div>`;
+  }
+  $('tr_log').innerHTML = h;
+}
+function trOrder(side, kind) {                                             // market order, now
+  const TR = P.trade;
+  if (!TR) { trMsg('Load a .data file first'); return; }
+  const r = TR.market(side, trInt('tr_qty', 1), trInt('tr_tp', 0), trInt('tr_sl', 0), P.pos);
+  trMsg(r.ok ? '' : r.msg);
+  trKey = ''; trVer = -1; renderAll();
+}
+// Limit / stop: the first click on the button arms it, the mouse then picks the price on the chart (a preview line follows it),
+// and the click on the chart places the order.  The same button again, another order button or Esc cancels.
+const ARM_BTN = { '1limit': 'tr_blmt', '-1limit': 'tr_slmt', '1stop': 'tr_bstp', '-1stop': 'tr_sstp' };
+function updateArmButtons() {
+  for (const id of Object.values(ARM_BTN)) $(id).classList.remove('armed');
+  if (P.arm) $(ARM_BTN[P.arm.side + P.arm.type]).classList.add('armed');
+}
+function armOrder(side, type) {
+  const TR = P.trade;
+  if (!TR) { trMsg('Load a .data file first'); return; }
+  if (P.arm && P.arm.side === side && P.arm.type === type) { disarmOrder(); return; }
+  P.arm = { side, type };
+  for (const ch of charts) { ch.S.tool = null; ch.S.pend = null; ch.S.dd = null; }       // a drawing tool would swallow the click
+  eachChart(() => updateToolButtons());
+  updateArmButtons();
+  trMsg(`${side > 0 ? 'Buy' : 'Sell'} ${type}: click the chart at the price (Esc cancels)`, true);
+  renderAll();
+}
+function disarmOrder() {
+  if (!P.arm) return;
+  P.arm = null; updateArmButtons(); trMsg(''); renderAll();
+}
+// Chart click while armed: place the order at the price under the mouse (current chart's scale).
+function placeArmed(m) {
+  const TR = P.trade, a = P.arm; if (!TR || !a) return;
+  const r = TR.place(a.side, a.type, snapP(priceAt(m.y)), trInt('tr_qty', 1), trInt('tr_tp', 0), trInt('tr_sl', 0), P.pos);
+  if (!r.ok) { trMsg(r.msg); renderAll(); return; }                                  // stay armed: pick another price
+  P.arm = null; updateArmButtons(); trMsg(''); trKey = ''; trVer = -1; renderAll();
+}
+function setTradeCollapsed(c) {
+  $('trade').classList.toggle('collapsed', c);
+  $('trcollapse').innerHTML = c ? '&#171;' : '&#187;';                      // collapsed: << expands it, expanded: >> folds it to the right
+  try { localStorage.setItem('tv_trade_collapsed', c ? '1' : '0'); } catch (e) {}
+}
+function setTradePanel(on) { $('trade').classList.toggle('hide', !on); $('tradebtn').classList.toggle('on', on); }
+(function initTradePanel() {
+  const press = (id, fn) => { $(id).onclick = e => { fn(); e.currentTarget.blur(); }; };      // blur: Space must keep meaning play / pause
+  press('tr_mbuy', () => trOrder(1, 'mkt'));   press('tr_msell', () => trOrder(-1, 'mkt'));
+  press('tr_blmt', () => armOrder(1, 'limit')); press('tr_slmt', () => armOrder(-1, 'limit'));
+  press('tr_bstp', () => armOrder(1, 'stop'));  press('tr_sstp', () => armOrder(-1, 'stop'));
+  press('tr_close', () => {
+    const TR = P.trade; if (!TR) return;
+    const r = TR.flatten(P.pos); trMsg(r.ok ? '' : r.msg); trKey = ''; trVer = -1; renderAll();
+  });
+  press('tr_apply', () => {
+    const TR = P.trade; if (!TR) return;
+    if (TR.net === 0) { trMsg('No open position'); return; }
+    TR.setExitTicks('tp', trInt('tr_tp', 0)); TR.setExitTicks('sl', trInt('tr_sl', 0)); trMsg(''); trKey = ''; trVer = -1; renderAll();
+  });
+  press('tr_cancelall', () => { if (P.trade) { P.trade.cancelAll(); trKey = ''; trVer = -1; renderAll(); } });
+  press('tr_clear', () => { if (P.trade) { P.trade.clearHistory(); trKey = ''; trVer = -1; renderAll(); } });
+  $('tr_tp').addEventListener('input', updateTrHint); $('tr_sl').addEventListener('input', updateTrHint);
+  $('tr_orders').addEventListener('click', e => {
+    const id = e.target.dataset && e.target.dataset.cancel;
+    if (id && P.trade) { P.trade.cancel(+id); trKey = ''; trVer = -1; renderAll(); }
+  });
+  $('tradebtn').onclick = () => setTradePanel($('trade').classList.contains('hide'));
+  $('trcollapse').onclick = e => { setTradeCollapsed(!$('trade').classList.contains('collapsed')); e.currentTarget.blur(); };
+  try { if (localStorage.getItem('tv_trade_collapsed') === '1') setTradeCollapsed(true); } catch (e) {}
+  updateTrHint();
+})();
+
 function setFootprint(on) {
   S.fp = on; cur.el.fp.classList.toggle('on', on);
   if (on && S.vis > 30) S.vis = FP_VIS;            // footprint needs wide bars
@@ -2074,6 +2515,7 @@ function onKey(e) {
   else if (e.key === 'End') { S.follow = true; updateFollowBtn(); render(); }
   else if (e.key === 'f' || e.key === 'F') setFootprint(!S.fp);
   else if (e.key === 't' || e.key === 'T') { use(charts[0]); setTape(!S.tape); }
+  else if (e.key === 'x' || e.key === 'X') setTradePanel($('trade').classList.contains('hide'));
   else if (e.key === 's' || e.key === 'S') setSpeedPane(!S.spd);
   else if (e.shiftKey && (e.key === 'v' || e.key === 'V')) setTool('vp');      // Shift+V: volume profile tool (again = back to select)
   else if (e.key === 'v' || e.key === 'V') setVolumePane(!S.vol);
@@ -2081,7 +2523,7 @@ function onKey(e) {
   else if (e.key === 'c' || e.key === 'C') setCvdPane(!S.cvd);
   else if (e.key === 'r' || e.key === 'R') setReversal(!P.revOn);
   else if (e.key === 'g' || e.key === 'G') setBigTrade(!P.bigOn);
-  else if (e.key === 'Escape') { closeStyler(); S.pend = null; S.tool = null; S.sel = null; S.dd = null; updateToolButtons(); render(); }
+  else if (e.key === 'Escape') { disarmOrder(); closeStyler(); S.pend = null; S.tool = null; S.sel = null; S.dd = null; updateToolButtons(); render(); }
   else if (e.key === 'Delete' || e.key === 'Backspace') { if (!stylerOpen()) deleteSelected(); }
   else if (e.key === 'b' || e.key === 'B') setToolbarCollapsed(!$('toolbar').classList.contains('collapsed'));
   else if (e.key === 'd' || e.key === 'D') { const t = (active || charts[0]).el.tools; setToolsCollapsed(t, !t.classList.contains('collapsed')); }
