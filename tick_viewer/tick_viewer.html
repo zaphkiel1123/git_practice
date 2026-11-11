@@ -1220,7 +1220,7 @@ function draw() {
   ctx.restore();
 
   // crosshair
-  let hover = -1, hoverRow = null, chPrice = null;
+  let hover = -1, hoverRow = null, chPrice = null, chCvd = null, chCvdY = 0;
   const m = S.mouse;
   if (m && m.x >= L.plotX && m.x <= L.plotX + L.plotW && m.y >= 0 && m.y <= L.volBottom) {
     // In the price pane the horizontal line snaps to the nearest 0.25 level (the tick size), not to the raw pixel.
@@ -1233,6 +1233,12 @@ function draw() {
     ctx.moveTo(Math.round(m.x) + 0.5, 0); ctx.lineTo(Math.round(m.x) + 0.5, L.volBottom);
     ctx.moveTo(0, Math.round(chY) + 0.5); ctx.lineTo(L.plotX + L.plotW, Math.round(chY) + 0.5);
     ctx.stroke(); ctx.setLineDash([]);
+    // In the CVD pane the horizontal line sits at the raw pixel; read the CVD value at that height off the CVD scale.
+    if (S.cvd && cy && m.y >= cvdY0 && m.y <= cvdY1) {
+      const top_ = cvdY0 + 10;
+      chCvd = Math.round(cvdMin + (cvdY1 - m.y) / (cvdY1 - top_) * (cvdMax - cvdMin));
+      chCvdY = m.y;
+    }
     const idx = Math.floor(L.first + (m.x - L.plotX) / L.barW);
     if (idx >= 0 && idx < count) hover = idx;
   }
@@ -1301,6 +1307,7 @@ function draw() {
     ctx.fillText(fmtSigned(Math.round(cvdMin)), L.plotX + L.plotW + 6, cvdY1 - 6);
     const liveCvd = bb.cc[lastI];
     tag(fmtSigned(liveCvd), L.plotX + L.plotW, Math.max(cvdY0 + 8, Math.min(cvdY1 - 2, cy(liveCvd))), liveCvd >= 0 ? '#2a9d46' : '#7e45c2', '#fff');
+    if (chCvd != null) tag(fmtSigned(chCvd), L.plotX + L.plotW, chCvdY, '#4a4f60', '#fff');   // value under the cursor
   }
   if (S.tbl && L.tblH > 0) {                     // row names of the volume / delta / %delta table, on the price-axis side
     ctx.save();
@@ -1856,7 +1863,8 @@ function contrastFg(hex) {                                   // dark or white te
   const v = parseInt(m[1], 16), lum = 0.299 * (v >> 16) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255);
   return lum > 140 ? '#0b0e14' : '#fff';
 }
-const SWATCHES = ['#4aa3ff', '#f5a742', '#26a69a', '#ef5350', '#b47cf5', '#f5c542', '#ffffff', '#8b8f9a'];
+const SWATCHES = ['#4aa3ff', '#f5a742', '#26a69a', '#ef5350', '#b47cf5', '#f5c542', '#ffffff', '#8b8f9a',
+                  '#90ee90', '#1b7a2f'];                       // light green, dark green
 const stylerEl = $('styler'), SQ = id => stylerEl.querySelector('#' + id);   // the popup moves into the window that opens it
 let stylerD = null;
 function stylerOpen() { return stylerEl.style.display !== 'none'; }
