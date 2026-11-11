@@ -1220,7 +1220,7 @@ function draw() {
   ctx.restore();
 
   // crosshair
-  let hover = -1, hoverRow = null, chPrice = null, chCvd = null, chCvdY = 0;
+  let hover = -1, hoverRow = null, chPrice = null, chCvd = null, chCvdY = 0, chSpd = null, chSpdY = 0, chVol = null, chVolY = 0;
   const m = S.mouse;
   if (m && m.x >= L.plotX && m.x <= L.plotX + L.plotW && m.y >= 0 && m.y <= L.volBottom) {
     // In the price pane the horizontal line snaps to the nearest 0.25 level (the tick size), not to the raw pixel.
@@ -1238,6 +1238,16 @@ function draw() {
       const top_ = cvdY0 + 10;
       chCvd = Math.round(cvdMin + (cvdY1 - m.y) / (cvdY1 - top_) * (cvdMax - cvdMin));
       chCvdY = m.y;
+    }
+    // Speed-of-tape pane: prints / s at the cursor height (0 at the bottom of the bars, spdTopV at the top).
+    if (S.spd && sy && m.y >= spdY0 && m.y <= spdY1) {
+      chSpd = Math.max(0, Math.round((spdY1 - m.y) / (spdY1 - spdY0 - 10) * spdTopV));
+      chSpdY = m.y;
+    }
+    // Volume pane: volume at the cursor height (0 at the bottom, the largest visible bar's volume at its top).
+    if (S.vol && m.y >= L.volTop && m.y <= L.volBottom) {
+      chVol = Math.max(0, Math.round((L.volBottom - m.y) / volScale * vmax));
+      chVolY = m.y;
     }
     const idx = Math.floor(L.first + (m.x - L.plotX) / L.barW);
     if (idx >= 0 && idx < count) hover = idx;
@@ -1300,7 +1310,9 @@ function draw() {
     const kLive = bb.fill > 0 ? bb.nb : (!bb.timeMode && bb.nb > 0 ? bb.nb - 1 : -1);
     const live = P.pos > 0 && kLive >= 0 && bb.i1[kLive] === P.pos - 1 ? bb.speedAt(P.pos - 1, kLive) : 0;
     tag(String(live), L.plotX + L.plotW, Math.max(spdY0 + 8, sy(live)), live > S.spdMin ? '#2a9d46' : '#4a4f60', '#fff');
+    if (chSpd != null) tag(String(chSpd), L.plotX + L.plotW, chSpdY, '#4a4f60', '#fff');       // value under the cursor
   }
+  if (chVol != null) tag(String(chVol), L.plotX + L.plotW, chVolY, '#4a4f60', '#fff');           // volume under the cursor
   if (S.cvd) {                                   // CVD scale: pane top / bottom, and the live value
     ctx.fillStyle = C.text; ctx.textAlign = 'left';
     ctx.fillText(fmtSigned(Math.round(cvdMax)), L.plotX + L.plotW + 6, cvdY0 + 14);
