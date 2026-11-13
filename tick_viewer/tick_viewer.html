@@ -148,12 +148,12 @@
     <select id="unit" title="How a candle is formed">
       <option value="ticks">ticks (prints)</option>
       <option value="contracts">contracts (sum of size)</option>
-      <option value="time">time</option>
+      <option value="time" selected>time</option>
     </select>
-    <input id="barsize" type="number" min="1" max="100000" value="200" step="1">
-    <select id="ivl" title="Candle interval" style="display:none">
+    <input id="barsize" type="number" min="1" max="100000" value="200" step="1" style="display:none">
+    <select id="ivl" title="Candle interval">
       <option value="1">1s</option>
-      <option value="5">5s</option>
+      <option value="5" selected>5s</option>
       <option value="15">15s</option>
       <option value="60">1min</option>
       <option value="300">5min</option>
@@ -187,7 +187,7 @@
     <button id="tblbtn" class="on" title="Volume / delta / %delta table under the volume pane (Y)">Vol Table</button>
     <button id="spdbtn" class="on" title="Speed-of-tape pane: peak prints/s per candle (S)">Speed</button>
     <label for="spdmin" title="A candle gets a speed-of-tape bar only when its peak is above this many prints per second">&gt;</label>
-    <input id="spdmin" type="number" min="0" max="10000" value="100" step="10" style="width:62px"
+    <input id="spdmin" type="number" min="0" max="10000" value="200" step="10" style="width:62px"
            title="Speed-of-tape threshold (prints / s)">
     <button id="revbtn" class="on" title="Reversal ticks on the replay slider (R): red = a high price later dropped from, green = a low price later bounced up from">Reversal</button>
     <label for="revticks" title="Price must move at least this many ticks (1 tick = 0.25) away from the high / low">&ge;</label>
@@ -289,7 +289,7 @@
 const REC_SIZE = 57;
 const TICK_SIZE = 0.25;                        // ES minimum price increment
 const SPEED_WINDOW_MS = 1000;                  // speed of tape = prints in the trailing second
-const SPEED_MIN = 100;                         // default speed-of-tape threshold (prints / s); the toolbar box overrides it
+const SPEED_MIN = 200;                         // default speed-of-tape threshold (prints / s); the toolbar box overrides it
 const IMBALANCE_RATIO = 3;                     // same 3x ratio as es_training/feature_pipeline.py
 const DOMINANCE = 0.25;                        // one side must exceed the other by more than 25% to 'win' a price level
 // Record layout (little-endian, packed):
@@ -688,6 +688,17 @@ class TradeSim {
   }
   // Forget the closed trades and the execution markers (the open position and working orders stay).
   clearHistory() { this.log = []; this.fills = []; this.realized = 0; this.ver++; }
+  // Move a working order to a new price (chart drag).  The price is clamped so the order stays pending
+  // (a limit never crosses the market, a stop stays on its side), exactly as validate() requires at placement.
+  moveOrder(id, price, pos) {
+    const o = this.orders.find(x => x.id === id), q = this.quote(pos);
+    if (!o || !q) return;
+    const ts = TICK_SIZE;
+    price = Math.round(price / ts) * ts;
+    if (o.type === 'limit') price = o.side > 0 ? Math.min(price, q.ask - ts) : Math.max(price, q.bid + ts);
+    else price = o.side > 0 ? Math.max(price, q.ask + ts) : Math.min(price, q.bid - ts);
+    if (price !== o.price) { o.price = price; this.ver++; }
+  }
   cancel(id) { const n = this.orders.length; this.orders = this.orders.filter(o => o.id !== id); if (this.orders.length !== n) this.ver++; }
   cancelAll() { if (this.orders.length) { this.orders = []; this.ver++; } }
   flatten(pos) {
@@ -2263,6 +2274,14 @@ function drawTrading() {
   const right = L.plotX + L.plotW;
   ctx.save(); ctx.beginPath(); ctx.rect(L.plotX, L.priceTop, L.plotW, L.priceBottom - L.priceTop); ctx.clip();
   const xEnd = right, xStart = right - TR_LINE * L.plotW;
+  ctx.save();                                  // grey dotted line from the entry point of every closed trade to its exit point (under the markers)
+  ctx.strokeStyle = '#9aa0ad'; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+  for (const t of TR.log) {
+    const x0 = xOfT(t.tIn), y0 = pyL(t.entry), x1 = xOfT(t.tOut), y1 = pyL(t.exit);
+    if (Math.max(x0, x1) < L.plotX - 12 || Math.min(x0, x1) > right + 12) continue;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  }
+  ctx.restore();
   for (const f of TR.fills) {                  // execution markers: right-pointing = entered (tip on the fill); up = bought to exit, down = sold to exit
     const x = xOfT(f.t), y = pyL(f.price);
     if (x < L.plotX - 12 || x > right + 12) continue;
@@ -2323,21 +2342,26 @@ function drawTradingTags() {                                              // pri
   for (const [p, bg, fg] of list) { const y = pyL(p); if (y >= L.priceTop && y <= L.priceBottom) tag(p.toFixed(2), x, y, bg, fg); }
 }
 // The TP / SL line of the open trade under the mouse (price pane only), or null.
-function hitTrade(m) {
+function hitTrade(m) {                           // { kind: 'tp' | 'sl' } or { kind: 'ord', id } (working limit / stop order)
   const TR = P.trade;
-  if (!TR || TR.net === 0 || !m || !drawReady() || !inPricePane(m) || m.x < L.plotX + (1 - TR_LINE) * L.plotW - HIT) return null;   // only where the line is drawn
+  if (!TR || !m || !drawReady() || !inPricePane(m) || m.x < L.plotX + (1 - TR_LINE) * L.plotW - HIT) return null;   // only where the line is drawn
   let best = null, bd = HIT + 1;
-  for (const [kind, price] of [['tp', TR.tp], ['sl', TR.sl]]) {
+  if (TR.net !== 0) for (const [kind, price] of [['tp', TR.tp], ['sl', TR.sl]]) {
     if (price == null) continue;
     const dd = Math.abs(m.y - pyL(price));
     if (dd < bd) { bd = dd; best = { kind }; }
+  }
+  for (const o of TR.orders) {
+    const dd = Math.abs(m.y - pyL(o.price));
+    if (dd < bd) { bd = dd; best = { kind: 'ord', id: o.id }; }
   }
   return best;
 }
 function dragTrade(m) {
   const TR = P.trade; if (!TR || !S.td) return;
   const p = snapP(priceAt(m.y));
-  if (Number.isFinite(p)) TR.setExit(S.td.kind, p);
+  if (!Number.isFinite(p)) return;
+  if (S.td.kind === 'ord') TR.moveOrder(S.td.id, p, P.pos); else TR.setExit(S.td.kind, p);
 }
 
 let trKey = '', trVer = -1;
