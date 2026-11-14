@@ -74,6 +74,9 @@
             background: #1e222d; border: 1px solid #3a3f4d; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.5); }
   #styler .srow { display: flex; align-items: center; gap: 8px; }
   #styler .srow > label { width: 44px; }
+  #styler #st_fsw { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+  #styler .srow.st_fill { display: none; }
+  #styler.isrect .srow.st_fill { display: flex; }
   #styler input[type=color] { width: 34px; height: 24px; padding: 0; border: 1px solid #3a3f4d; background: none; cursor: pointer; }
   #styler input[type=range] { flex: 1; min-width: 0; padding: 0; }
   #styler #st_sw { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
@@ -230,6 +233,7 @@
     <button data-tool="select" class="on" title="Select / move / edit drawings (Esc)">Select</button>
     <button data-tool="line" title="Horizontal line: click once; it starts at the click and runs to the right">Line</button>
     <button data-tool="ray" title="Ray: click (or press-drag-release) the start point, then click a second point; it extends beyond it">Ray</button>
+    <button data-tool="rect" title="Rectangle (Shift+R): press-drag-release (or click two opposite corners). Double-click it to set the line colour / width and the fill (print) colour / opacity. Drag a corner or edge to resize, drag inside to move.">Rect</button>
     <button data-tool="vp" title="Volume profile (Shift+V): click the start time, then click the end time (or press-drag-release). Light yellow = volume at each price; the histogram to its left = volume delta (ask - bid). Drag the left / right edge to resize, drag inside to move.">Vol Prof</button>
     <div class="sep"></div>
     <button data-tool="buy" class="buy" title="Buy (long) risk:reward: click for the entry, then drag the TP / SL / entry lines and the right edge">Buy RR</button>
@@ -277,8 +281,10 @@
  </div>
 </div>
 <div id="styler" style="display:none">
-  <div class="srow"><label for="st_col">Colour</label><input id="st_col" type="color" value="#ffffff"><div id="st_sw"></div></div>
+  <div class="srow"><label for="st_col" id="st_collbl">Colour</label><input id="st_col" type="color" value="#ffffff"><div id="st_sw"></div></div>
   <div class="srow"><label for="st_w">Width</label><input id="st_w" type="range" min="0.5" max="8" step="0.5" value="1.5"><span id="st_wv">1.5</span></div>
+  <div class="srow st_fill"><label for="st_fcol">Fill</label><input id="st_fcol" type="color" value="#4aa3ff"><div id="st_fsw"></div></div>
+  <div class="srow st_fill"><label for="st_fa">Opacity</label><input id="st_fa" type="range" min="0" max="100" step="5" value="20"><span id="st_fav">20%</span></div>
   <div class="srow" style="justify-content:flex-end"><button id="st_ok">Done</button></div>
 </div>
 <div id="status">&nbsp;</div>
@@ -1843,7 +1849,7 @@ function onCvWheel(e) {
 function onCvDbl(e) {
   if (S.mouse && drawReady() && !S.tool) {                                            // double-click a line / ray: style popup
     const h = hitDraw(S.mouse);
-    if (h && (h.d.type === 'line' || h.d.type === 'ray')) { S.sel = h.d; S.dd = null; openStyler(h.d, e.clientX, e.clientY); render(); return; }
+    if (h && (h.d.type === 'line' || h.d.type === 'ray' || h.d.type === 'rect')) { S.sel = h.d; S.dd = null; openStyler(h.d, e.clientX, e.clientY); render(); return; }
   }
   if (S.mouse && drawReady() && (S.tool || hitDraw(S.mouse))) return;                // not on a drawing / while a tool is armed
   const dv_ = onSplitter(S.mouse);                                            // double-click a divider: default height
@@ -1860,7 +1866,7 @@ function onCvDbl(e) {
 // Every point is stored as real time + price, so a drawing stays put when the bar type / size changes.
 // Time <-> bar position is linear in each bar mode (time bars: ms; tick bars: print index; contracts bars:
 // cumulative contracts), so drawings can also be placed in the not-yet-replayed area to the right.
-const DRAW_COL = { line: '#ffffff', ray: '#f5a742', tp: '#26a69a', sl: '#ef5350', entry: '#aab0c0' };
+const DRAW_COL = { line: '#ffffff', ray: '#f5a742', rect: '#4aa3ff', tp: '#26a69a', sl: '#ef5350', entry: '#aab0c0' };
 const HIT = 6;                                               // pixel tolerance for grabbing a line
 let drawId = 0;
 function cumQOf() {
@@ -1921,6 +1927,7 @@ function geomOf(d) {
   if (d.type === 'line') return { x0: xOfT(d.t0), y: pyL(d.p) };
   if (d.type === 'ray') return { x0: xOfT(d.t0), y0: pyL(d.p0), x1: xOfT(d.t1), y1: pyL(d.p1) };
   if (d.type === 'vp') return { x0: xOfT(d.t0), x1: xOfT(d.t1) };
+  if (d.type === 'rect') return { x0: xOfT(d.t0), y0: pyL(d.p0), x1: xOfT(d.t1), y1: pyL(d.p1) };
   return { x0: xOfT(d.t0), x1: xOfT(d.t1), yE: pyL(d.entry), yTP: pyL(d.tp), ySL: pyL(d.sl) };
 }
 // ---------- volume profile drawing ('vp') ----------
@@ -2033,6 +2040,14 @@ function hitDraw(m) {
     } else if (d.type === 'vp') {
       const part = hitVP(d, m);
       if (part) return { d, part };
+    } else if (d.type === 'rect') {
+      const xl = Math.min(g.x0, g.x1), xr = Math.max(g.x0, g.x1), yt = Math.min(g.y0, g.y1), yb = Math.max(g.y0, g.y1);
+      if (m.x < xl - HIT || m.x > xr + HIT || m.y < yt - HIT || m.y > yb + HIT) continue;
+      for (const X of [0, 1]) for (const Y of [0, 1])                             // corners first
+        if (Math.hypot(m.x - g['x' + X], m.y - g['y' + Y]) <= 8) return { d, part: 'c' + X + Y };
+      for (const X of [0, 1]) if (Math.abs(m.x - g['x' + X]) <= HIT) return { d, part: 'ex' + X };
+      for (const Y of [0, 1]) if (Math.abs(m.y - g['y' + Y]) <= HIT) return { d, part: 'ey' + Y };
+      if (m.x >= xl && m.x <= xr && m.y >= yt && m.y <= yb) return { d, part: 'move' };
     } else if (d.type === 'ray') {
       if (Math.hypot(m.x - g.x0, m.y - g.y0) <= 8) return { d, part: 'a' };
       if (Math.hypot(m.x - g.x1, m.y - g.y1) <= 8) return { d, part: 'b' };
@@ -2099,6 +2114,11 @@ function commitRay(m) {
     return;
   }
   if (t1 === pd.t0 && p1 === pd.p0) { updateToolButtons(); return; }     // zero length: cancel
+  if (pd.kind === 'rect') {
+    if (t1 === pd.t0 || p1 === pd.p0) { updateToolButtons(); return; }   // degenerate (no width or no height): cancel
+    addDraw({ type: 'rect', t0: pd.t0, p0: pd.p0, t1, p1 });
+    return;
+  }
   addDraw({ type: 'ray', t0: pd.t0, p0: pd.p0, t1, p1 });
 }
 // Returns true when the click was consumed by the drawing layer (so the chart must not start a pan).
@@ -2107,6 +2127,7 @@ function drawMouseDown(mm) {
   if (S.pend) { if (!S.pend.down) commitRay(mm); return true; }          // second click of a ray
   if (S.tool === 'line') { addDraw({ type: 'line', t0: tOfX(mm.x), p: snapP(priceAt(mm.y)) }); return true; }
   if (S.tool === 'vp') { S.pend = { kind: 'vp', t0: tOfX(mm.x), ax: mm.x, ay: mm.y, down: true }; return true; }
+  if (S.tool === 'rect') { S.pend = { kind: 'rect', t0: tOfX(mm.x), p0: snapP(priceAt(mm.y)), ax: mm.x, ay: mm.y, down: true }; return true; }
   if (S.tool === 'ray') { S.pend = { t0: tOfX(mm.x), p0: snapP(priceAt(mm.y)), ax: mm.x, ay: mm.y, down: true }; return true; }
   if (S.tool === 'buy' || S.tool === 'sell') { addDraw(newRR(S.tool, mm)); return true; }
   const h = hitDraw(mm);
@@ -2131,6 +2152,12 @@ function dragDraw(m) {
     if (D.part === 'a') d.t0 = tOfX(m.x);
     else if (D.part === 'b') d.t1 = tOfX(m.x);
     else { d.t0 = shiftT(o.t0); d.t1 = shiftT(o.t1); }
+  } else if (d.type === 'rect') {
+    const P_ = D.part;
+    if (P_ === 'move') { d.t0 = shiftT(o.t0); d.t1 = shiftT(o.t1); d.p0 = o.p0 + dP; d.p1 = o.p1 + dP; }
+    else if (P_[0] === 'c') { d['t' + P_[1]] = tOfX(m.x); d['p' + P_[2]] = pAbs; }
+    else if (P_[1] === 'x') d['t' + P_[2]] = tOfX(m.x);
+    else d['p' + P_[2]] = pAbs;
   } else if (d.type === 'line') {
     if (D.part === 'anchor') d.t0 = shiftT(o.t0);
     d.p = o.p + dP;
@@ -2153,6 +2180,12 @@ function dragDraw(m) {
 // Per-drawing style (lines and rays): d.col / d.lw override the defaults.  Double-click a line or ray to edit.
 const colOf = d => d.col || DRAW_COL[d.type];
 const lwOf = d => d.lw || 1.5;
+const fillOf = d => d.fill || '#4aa3ff';                      // rectangle: fill ("print") colour
+const faOf = d => d.fa == null ? 0.2 : d.fa;                  // rectangle: fill opacity 0..1 (0 = no fill)
+function rgbaOf(hex, a) {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex || ''), v = m ? parseInt(m[1], 16) : 0x4aa3ff;
+  return `rgba(${v >> 16},${(v >> 8) & 255},${v & 255},${a})`;
+}
 function contrastFg(hex) {                                   // dark or white text on a coloured price tag
   const m = /^#([0-9a-f]{6})$/i.exec(hex || '');
   if (!m) return '#0b0e14';
@@ -2169,6 +2202,12 @@ function openStyler(d, cx, cy) {
   stylerD = d;
   const box = stylerEl, col = colOf(d), lw = lwOf(d);
   SQ('st_col').value = col; SQ('st_w').value = lw; SQ('st_wv').textContent = lw;
+  box.classList.toggle('isrect', d.type === 'rect');
+  SQ('st_collbl').textContent = d.type === 'rect' ? 'Line' : 'Colour';
+  if (d.type === 'rect') {
+    const fa = Math.round(faOf(d) * 100);
+    SQ('st_fcol').value = fillOf(d); SQ('st_fa').value = fa; SQ('st_fav').textContent = fa + '%';
+  }
   cur.doc.body.appendChild(box);                                       // show it in the window that was double-clicked
   box.style.display = 'flex';
   const w = box.offsetWidth || 190, h = box.offsetHeight || 110;
@@ -2181,6 +2220,15 @@ function applyStyle(col, lw) {
   if (lw) { stylerD.lw = +lw; SQ('st_wv').textContent = lw; }
   renderAll();
 }
+function applyFill(col, pct) {                                // rectangle fill colour / opacity (%)
+  if (!stylerD || stylerD.type !== 'rect') return;
+  if (col) {
+    stylerD.fill = col; SQ('st_fcol').value = col;
+    if (faOf(stylerD) === 0) { stylerD.fa = 0.2; SQ('st_fa').value = 20; SQ('st_fav').textContent = '20%'; }   // picking a colour turns the fill on
+  }
+  if (pct != null) { stylerD.fa = +pct / 100; SQ('st_fav').textContent = pct + '%'; }
+  renderAll();
+}
 (function initStyler() {
   const sw = SQ('st_sw');
   for (const c of SWATCHES) {
@@ -2188,6 +2236,14 @@ function applyStyle(col, lw) {
     b.className = 'sw'; b.style.background = c; b.title = c; b.onclick = () => applyStyle(c, null);
     sw.appendChild(b);
   }
+  const fsw = SQ('st_fsw');
+  for (const c of SWATCHES) {
+    const b = document.createElement('button');
+    b.className = 'sw'; b.style.background = c; b.title = c; b.onclick = () => applyFill(c, null);
+    fsw.appendChild(b);
+  }
+  SQ('st_fcol').oninput = e => applyFill(e.target.value, null);
+  SQ('st_fa').oninput = e => applyFill(null, e.target.value);
   SQ('st_col').oninput = e => applyStyle(e.target.value, null);
   SQ('st_w').oninput = e => applyStyle(null, e.target.value);
   SQ('st_ok').onclick = closeStyler;
@@ -2216,6 +2272,15 @@ function hseg(x0, x1, y, col, lw, dash) {
 function rayEnd(g) {                                          // far point of a ray, well past the plot edge
   const dx = g.x1 - g.x0, dy = g.y1 - g.y0, len = Math.hypot(dx, dy);
   return len < 1e-9 ? null : [g.x0 + dx * 8000 / len, g.y0 + dy * 8000 / len];
+}
+function drawRect(d, sel, ghost) {
+  const g = geomOf(d), xl = Math.min(g.x0, g.x1), xr = Math.max(g.x0, g.x1), yt = Math.min(g.y0, g.y1), yb = Math.max(g.y0, g.y1);
+  const fa = faOf(d);
+  if (fa > 0) { ctx.fillStyle = rgbaOf(fillOf(d), fa); ctx.fillRect(xl, yt, xr - xl, yb - yt); }
+  ctx.strokeStyle = colOf(d); ctx.lineWidth = lwOf(d) + (sel ? 0.5 : 0); ctx.setLineDash(ghost ? [5, 4] : []);
+  ctx.strokeRect(Math.round(xl) + 0.5, Math.round(yt) + 0.5, Math.round(xr - xl), Math.round(yb - yt));
+  ctx.setLineDash([]);
+  if (sel) { for (const x of [g.x0, g.x1]) for (const y of [g.y0, g.y1]) handleSq(x, y); }
 }
 function drawRR(d, sel) {
   const g = geomOf(d), ts = TICK_SIZE, right = L.plotX + L.plotW;
@@ -2248,6 +2313,7 @@ function drawDrawings() {
   for (const d of P.draws) {
     const sel = d === S.sel, g = geomOf(d);
     if (d.type === 'vp') drawVP(d, sel, false);
+    else if (d.type === 'rect') drawRect(d, sel, false);
     else if (d.type === 'line') {
       hseg(Math.max(g.x0, L.plotX), right, g.y, colOf(d), lwOf(d) + (sel ? 0.5 : 0));
       if (sel) handleDot(g.x0, g.y);
@@ -2270,6 +2336,8 @@ function drawDrawings() {
     } else if (S.tool === 'vp') {
       ctx.strokeStyle = VP_LINE; const x = Math.round(m.x) + 0.5;
       ctx.beginPath(); ctx.moveTo(x, L.priceTop); ctx.lineTo(x, L.priceBottom); ctx.stroke();
+    } else if (S.pend && S.pend.kind === 'rect') {                        // live preview while choosing the opposite corner
+      drawRect({ type: 'rect', t0: S.pend.t0, p0: S.pend.p0, t1: tOfX(m.x), p1: snapP(priceAt(m.y)) }, false, true);
     } else if (S.pend) {
       const g = { x0: xOfT(S.pend.t0), y0: pyL(S.pend.p0), x1: m.x, y1: pyL(snapP(priceAt(m.y))) }, e = rayEnd(g);
       ctx.strokeStyle = DRAW_COL.ray;
@@ -2679,6 +2747,7 @@ function onKey(e) {
   else if (e.key === 't' || e.key === 'T') { use(charts[0]); setTape(!S.tape); }
   else if (e.key === 'x' || e.key === 'X') { const tp = trPanelOf(active); setTradePanel(tp.root.classList.contains('hide'), tp); }
   else if (e.key === 's' || e.key === 'S') setSpeedPane(!S.spd);
+  else if (e.shiftKey && (e.key === 'r' || e.key === 'R')) setTool('rect');    // Shift+R: rectangle tool
   else if (e.shiftKey && (e.key === 'v' || e.key === 'V')) setTool('vp');      // Shift+V: volume profile tool (again = back to select)
   else if (e.key === 'v' || e.key === 'V') setVolumePane(!S.vol);
   else if (e.key === 'y' || e.key === 'Y') setVolTable(!S.tbl);
