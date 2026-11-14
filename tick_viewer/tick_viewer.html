@@ -2531,6 +2531,37 @@ function syncUnitControls() {
   E.size.style.display = time ? 'none' : ''; E.ivl.style.display = time ? '' : 'none';
 }
 
+// Mouse wheel over the Time & Sales tape: scroll down = advance to the end of the next group of prints that share
+// the same time stamp (same HH:MM:SS.mmm as shown on the tape); scroll up = go back over the newest such group.
+// Raise TAPE_GROUP_MS (e.g. 1000) to make one notch step a whole second instead of one millisecond.
+const TAPE_GROUP_MS = 1;
+{
+  let acc = 0, steps = 0, queued = false;
+  const grp = t => Math.floor(t / TAPE_GROUP_MS);
+  const applyTapeSteps = () => {
+    queued = false;
+    const n = steps; steps = 0;
+    const d = P.data; if (!d || n === 0) return;
+    let p = P.pos;
+    if (n > 0) {
+      for (let s = 0; s < n && p < d.n; s++) { const g = grp(d.t[p]); while (p < d.n && grp(d.t[p]) === g) p++; }
+    } else {
+      for (let s = 0; s < -n && p > 0; s++) { const g = grp(d.t[p - 1]); while (p > 0 && grp(d.t[p - 1]) === g) p--; }
+    }
+    if (p === P.pos) return;
+    setPlaying(false);
+    stepTicks(p - P.pos);
+  };
+  $('tape').addEventListener('wheel', e => {
+    e.preventDefault();
+    if (!P.data) return;
+    acc += e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1);
+    if (Math.abs(acc) < 60) return;                             // trackpads send many small deltas: one step per ~60 px
+    steps += acc > 0 ? 1 : -1; acc = 0;
+    if (!queued) { queued = true; window.requestAnimationFrame(applyTapeSteps); }
+  }, { passive: false });
+}
+
 $('play').onclick = () => setPlaying(!P.playing);
 $('steptick').onclick = () => { setPlaying(false); stepTicks(1); };
 $('stepback').onclick = () => { setPlaying(false); stepTicks(-1); };
