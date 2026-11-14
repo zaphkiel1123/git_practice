@@ -2367,43 +2367,50 @@ function dragTrade(m) {
 let trKey = '', trVer = -1;
 const trEsc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 const trInt = (id, min) => Math.max(min, parseInt($(id).value, 10) || 0);
-function trMsg(s, info) { const el = $('tr_msg'); el.textContent = s || ''; el.classList.toggle('info', !!info); }
+// Every window has its own copy of the trading panel (the main page's #trade and one clone per "+ window"); they all show
+// the same simulator (P.trade) and the same Qty / TP / SL inputs.  Each entry: { root, q(id), btn }.  The main page's
+// panel is trPanels[0] and is the source of truth for the input values (trInt reads it).
+const trPanels = [];
+const trSet = (id, fn) => { for (const p of trPanels) { const el = p.q(id); if (el) fn(el); } };    // apply to the element `id` of every panel
+function trMsg(s, info) { trSet('tr_msg', el => { el.textContent = s || ''; el.classList.toggle('info', !!info); }); }
 function updateTrHint() {
   const tp = trInt('tr_tp', 0), sl = trInt('tr_sl', 0), f = k => `${k} tk = ${(k * TICK_SIZE).toFixed(2)} pt = $${(k * TICK_VALUE).toFixed(2)}`;
-  $('tr_hint').textContent = `per contract:  TP ${tp ? f(tp) : 'none'}  |  SL ${sl ? f(sl) : 'none'}`;
+  const t = `per contract:  TP ${tp ? f(tp) : 'none'}  |  SL ${sl ? f(sl) : 'none'}`;
+  trSet('tr_hint', el => { el.textContent = t; });
 }
 function updateTradePanel() {
   const TR = P.trade;
   const key = TR ? TR.ver + ':' + P.pos : 'none';
   if (key === trKey) return;
   trKey = key;
-  if (!TR) { trVer = -1; $('tr_quote').textContent = 'no data loaded'; $('tr_pos').textContent = 'Flat'; $('tr_orders').innerHTML = ''; $('tr_log').innerHTML = ''; $('tr_real').textContent = ''; updateTrHint(); return; }
+  const html = (id, s) => trSet(id, el => { el.innerHTML = s; });          // same content into every window's panel
+  if (!TR) { trVer = -1; html('tr_quote', 'no data loaded'); html('tr_pos', 'Flat'); html('tr_orders', ''); html('tr_log', ''); html('tr_real', ''); updateTrHint(); return; }
   const q = TR.quote(P.pos);
-  $('tr_quote').innerHTML = q ? `Bid <b>${q.bid.toFixed(2)}</b> &nbsp; Ask <b>${q.ask.toFixed(2)}</b> &nbsp; Last <b>${q.last.toFixed(2)}</b>` : 'no quote yet: step the replay';
+  html('tr_quote', q ? `Bid <b>${q.bid.toFixed(2)}</b> &nbsp; Ask <b>${q.ask.toFixed(2)}</b> &nbsp; Last <b>${q.last.toFixed(2)}</b>` : 'no quote yet: step the replay');
   updateTrHint();
   const cls = v => v > 0 ? 'pos' : v < 0 ? 'neg' : '';
-  if (TR.net === 0) $('tr_pos').textContent = 'Flat';
+  if (TR.net === 0) html('tr_pos', 'Flat');
   else {
     const sgn = Math.sign(TR.net), un = TR.unreal(P.pos);
     const ex = (name, price) => price == null ? `${name} -` : (() => { const i = tpslInfo(TR, price); return `${name} ${price.toFixed(2)} (<span class="${cls(i.tk)}">${fmtTk(i.tk)} tk ${fmtUsd(i.usd)}</span>)`; })();
-    $('tr_pos').innerHTML = `<b class="${sgn > 0 ? 'pos' : 'neg'}">${sgn > 0 ? 'LONG' : 'SHORT'} ${Math.abs(TR.net)}</b> @ ${TR.avg.toFixed(2)}<br>` +
-      `Open P&amp;L <span class="${cls(un.usd)}">${fmtTk(un.ticks)} tk &nbsp;${fmtUsd(un.usd)}</span><br>${ex('TP', TR.tp)}<br>${ex('SL', TR.sl)}`;
+    html('tr_pos', `<b class="${sgn > 0 ? 'pos' : 'neg'}">${sgn > 0 ? 'LONG' : 'SHORT'} ${Math.abs(TR.net)}</b> @ ${TR.avg.toFixed(2)}<br>` +
+      `Open P&amp;L <span class="${cls(un.usd)}">${fmtTk(un.ticks)} tk &nbsp;${fmtUsd(un.usd)}</span><br>${ex('TP', TR.tp)}<br>${ex('SL', TR.sl)}`);
   }
   if (TR.ver === trVer) return;                 // orders / closed trades only change when the simulator does
   trVer = TR.ver;
-  $('tr_orders').innerHTML = TR.orders.length ? TR.orders.map(o =>
+  html('tr_orders', TR.orders.length ? TR.orders.map(o =>
     `<div class="it"><span class="${o.side > 0 ? 'pos' : 'neg'}">${o.side > 0 ? 'BUY' : 'SELL'} ${o.type === 'limit' ? 'LMT' : 'STP'} ${o.qty} @ ${o.price.toFixed(2)}` +
     `${o.tpTk || o.slTk ? ` <span class="trnote">tp ${o.tpTk || '-'} sl ${o.slTk || '-'}</span>` : ''}</span>` +
-    `<button data-cancel="${o.id}" title="Cancel this order">x</button></div>`).join('') : '<span class="trnote">none</span>';
+    `<button data-cancel="${o.id}" title="Cancel this order">x</button></div>`).join('') : '<span class="trnote">none</span>');
   const wins = TR.log.filter(t => t.usd > 0).length;
-  $('tr_real').innerHTML = TR.log.length ? `Realized <b class="${cls(TR.realized)}">${fmtUsd(TR.realized)}</b> &nbsp;(${TR.log.length} closes, ${wins} wins)` : '<span class="trnote">no closed trades yet</span>';
+  html('tr_real', TR.log.length ? `Realized <b class="${cls(TR.realized)}">${fmtUsd(TR.realized)}</b> &nbsp;(${TR.log.length} closes, ${wins} wins)` : '<span class="trnote">no closed trades yet</span>');
   let h = '';
   for (let i = TR.log.length - 1, c = 0; i >= 0 && c < 40; i--, c++) {
     const t = TR.log[i];
     h += `<div class="it"><span>${fmtHMS(t.tOut)} ${t.side > 0 ? 'L' : 'S'}${t.qty} ${t.entry.toFixed(2)}&gt;${t.exit.toFixed(2)} <span class="trnote">${trEsc(t.why)}</span></span>` +
          `<span class="${cls(t.usd)}">${fmtTk(t.ticks)}tk ${fmtUsd(t.usd)}</span></div>`;
   }
-  $('tr_log').innerHTML = h;
+  html('tr_log', h);
 }
 function trOrder(side, kind) {                                             // market order, now
   const TR = P.trade;
@@ -2416,8 +2423,8 @@ function trOrder(side, kind) {                                             // ma
 // and the click on the chart places the order.  The same button again, another order button or Esc cancels.
 const ARM_BTN = { '1limit': 'tr_blmt', '-1limit': 'tr_slmt', '1stop': 'tr_bstp', '-1stop': 'tr_sstp' };
 function updateArmButtons() {
-  for (const id of Object.values(ARM_BTN)) $(id).classList.remove('armed');
-  if (P.arm) $(ARM_BTN[P.arm.side + P.arm.type]).classList.add('armed');
+  for (const id of Object.values(ARM_BTN)) trSet(id, el => el.classList.remove('armed'));
+  if (P.arm) trSet(ARM_BTN[P.arm.side + P.arm.type], el => el.classList.add('armed'));
 }
 function armOrder(side, type) {
   const TR = P.trade;
@@ -2441,35 +2448,69 @@ function placeArmed(m) {
   if (!r.ok) { trMsg(r.msg); renderAll(); return; }                                  // stay armed: pick another price
   P.arm = null; updateArmButtons(); trMsg(''); trKey = ''; trVer = -1; renderAll();
 }
-function setTradeCollapsed(c) {
-  $('trade').classList.toggle('collapsed', c);
-  $('trcollapse').innerHTML = c ? '&#171;' : '&#187;';                      // collapsed: << expands it, expanded: >> folds it to the right
-  try { localStorage.setItem('tv_trade_collapsed', c ? '1' : '0'); } catch (e) {}
+function trPanelOf(ch) { return (ch && ch.trp) || trPanels[0]; }          // the trading panel of a window
+function setTradeCollapsed(c, p) {
+  p = p || trPanels[0];
+  p.root.classList.toggle('collapsed', c);
+  p.q('trcollapse').innerHTML = c ? '&#171;' : '&#187;';                    // collapsed: << expands it, expanded: >> folds it to the right
+  if (p === trPanels[0]) { try { localStorage.setItem('tv_trade_collapsed', c ? '1' : '0'); } catch (e) {} }
 }
-function setTradePanel(on) { $('trade').classList.toggle('hide', !on); $('tradebtn').classList.toggle('on', on); }
-(function initTradePanel() {
-  const press = (id, fn) => { $(id).onclick = e => { fn(); e.currentTarget.blur(); }; };      // blur: Space must keep meaning play / pause
+function setTradePanel(on, p) {
+  p = p || trPanels[0];
+  p.root.classList.toggle('hide', !on); p.btn.classList.toggle('on', on);
+}
+const trRefresh = () => { trKey = ''; trVer = -1; renderAll(); };
+// Wire one panel (the main page's, or the clone in a "+ window").  Several windows can each show a panel; the actions
+// all go to the one simulator, and the Qty / TP / SL inputs are mirrored between the panels.
+function wireTradePanel(p) {
+  const press = (id, fn) => { p.q(id).onclick = e => { fn(); e.currentTarget.blur(); }; };      // blur: Space must keep meaning play / pause
   press('tr_mbuy', () => trOrder(1, 'mkt'));   press('tr_msell', () => trOrder(-1, 'mkt'));
   press('tr_blmt', () => armOrder(1, 'limit')); press('tr_slmt', () => armOrder(-1, 'limit'));
   press('tr_bstp', () => armOrder(1, 'stop'));  press('tr_sstp', () => armOrder(-1, 'stop'));
   press('tr_close', () => {
     const TR = P.trade; if (!TR) return;
-    const r = TR.flatten(P.pos); trMsg(r.ok ? '' : r.msg); trKey = ''; trVer = -1; renderAll();
+    const r = TR.flatten(P.pos); trMsg(r.ok ? '' : r.msg); trRefresh();
   });
   press('tr_apply', () => {
     const TR = P.trade; if (!TR) return;
     if (TR.net === 0) { trMsg('No open position'); return; }
-    TR.setExitTicks('tp', trInt('tr_tp', 0)); TR.setExitTicks('sl', trInt('tr_sl', 0)); trMsg(''); trKey = ''; trVer = -1; renderAll();
+    TR.setExitTicks('tp', trInt('tr_tp', 0)); TR.setExitTicks('sl', trInt('tr_sl', 0)); trMsg(''); trRefresh();
   });
-  press('tr_cancelall', () => { if (P.trade) { P.trade.cancelAll(); trKey = ''; trVer = -1; renderAll(); } });
-  press('tr_clear', () => { if (P.trade) { P.trade.clearHistory(); trKey = ''; trVer = -1; renderAll(); } });
-  $('tr_tp').addEventListener('input', updateTrHint); $('tr_sl').addEventListener('input', updateTrHint);
-  $('tr_orders').addEventListener('click', e => {
+  press('tr_cancelall', () => { if (P.trade) { P.trade.cancelAll(); trRefresh(); } });
+  press('tr_clear', () => { if (P.trade) { P.trade.clearHistory(); trRefresh(); } });
+  for (const id of ['tr_qty', 'tr_tp', 'tr_sl']) p.q(id).addEventListener('input', e => {
+    const v = e.target.value;
+    trSet(id, el => { if (el !== e.target) el.value = v; });
+    updateTrHint();
+  });
+  p.q('tr_orders').addEventListener('click', e => {
     const id = e.target.dataset && e.target.dataset.cancel;
-    if (id && P.trade) { P.trade.cancel(+id); trKey = ''; trVer = -1; renderAll(); }
+    if (id && P.trade) { P.trade.cancel(+id); trRefresh(); }
   });
-  $('tradebtn').onclick = () => setTradePanel($('trade').classList.contains('hide'));
-  $('trcollapse').onclick = e => { setTradeCollapsed(!$('trade').classList.contains('collapsed')); e.currentTarget.blur(); };
+  p.btn.onclick = e => { setTradePanel(p.root.classList.contains('hide'), p); e.currentTarget.blur(); };
+  p.q('trcollapse').onclick = e => { setTradeCollapsed(!p.root.classList.contains('collapsed'), p); e.currentTarget.blur(); };
+}
+// Give a "+ window" its own trading panel (a clone of the main one), placed to the right of the chart.
+function addWindowTrade(winEl, btn) {
+  const main = trPanels[0].root, doc = winEl.ownerDocument;
+  const root = doc.importNode(main, true);
+  root.classList.remove('hide', 'collapsed');
+  winEl.querySelector('.wbody').appendChild(root);
+  const p = { root, q: id => root.querySelector('#' + id), btn };
+  for (const id of ['tr_qty', 'tr_tp', 'tr_sl']) p.q(id).value = $(id).value;
+  p.q('trcollapse').innerHTML = '&#187;';
+  trPanels.push(p);
+  wireTradePanel(p);
+  setTradePanel(true, p);
+  p.q('tr_msg').textContent = ''; updateArmButtons(); trRefresh();
+  return p;
+}
+function removeWindowTrade(p) {
+  const i = trPanels.indexOf(p); if (i > 0) trPanels.splice(i, 1);
+}
+(function initTradePanel() {
+  trPanels.push({ root: $('trade'), q: id => document.getElementById(id), btn: $('tradebtn') });
+  wireTradePanel(trPanels[0]);
   try { if (localStorage.getItem('tv_trade_collapsed') === '1') setTradeCollapsed(true); } catch (e) {}
   updateTrHint();
 })();
@@ -2539,7 +2580,7 @@ function onKey(e) {
   else if (e.key === 'End') { S.follow = true; updateFollowBtn(); render(); }
   else if (e.key === 'f' || e.key === 'F') setFootprint(!S.fp);
   else if (e.key === 't' || e.key === 'T') { use(charts[0]); setTape(!S.tape); }
-  else if (e.key === 'x' || e.key === 'X') setTradePanel($('trade').classList.contains('hide'));
+  else if (e.key === 'x' || e.key === 'X') { const tp = trPanelOf(active); setTradePanel(tp.root.classList.contains('hide'), tp); }
   else if (e.key === 's' || e.key === 'S') setSpeedPane(!S.spd);
   else if (e.shiftKey && (e.key === 'v' || e.key === 'V')) setTool('vp');      // Shift+V: volume profile tool (again = back to select)
   else if (e.key === 'v' || e.key === 'V') setVolumePane(!S.vol);
@@ -2631,6 +2672,7 @@ function addWindow() {
     `<button class="w_cvd" title="CVD pane (C)">CVD</button>` +
     `<button class="w_spd" title="Speed-of-tape pane (S)">Speed</button>` +
     `<button class="w_follow on" title="Keep newest bar in view (End)">Follow</button>` +
+    `<button class="w_trade on" title="Trading panel to the right of the chart (X)">Trade</button>` +
     `<span class="wnote">Space = play / pause, arrows = step, shift+arrow = bar</span></div>` +
     `<div class="scrubrow"><button class="w_start" title="Jump to start (Home)">|&lt;</button>` +
     `<button class="w_back" title="Back one tick (Left arrow)">&lt; tick</button>` +
@@ -2647,9 +2689,11 @@ function addWindow() {
   win.querySelector('.wbody').prepend(tools);
   doc.body.appendChild(win);
   const q = c => win.querySelector('.' + c);
+  const trp = addWindowTrade(win, q('w_trade'));
   const el = { fp: q('w_fp'), vol: q('w_vol'), tbl: q('w_tbl'), cvd: q('w_cvd'), spd: q('w_spd'), follow: q('w_follow'),
                unit: q('w_unit'), size: q('w_size'), ivl: q('w_ivl'), play: q('w_play'), tools };
   const ch = makeChart(win.querySelector('.chartbox canvas'), el, win, w);
+  ch.trp = trp;
   Object.assign(ch.S, { fp: false, vis: CANDLE_VIS, cvd: false, spd: false, spdMin: charts[0].S.spdMin });
   const run = fn => e => { setActive(ch); use(ch); fn(e); };
   el.fp.onclick = run(() => setFootprint(!S.fp));
@@ -2678,6 +2722,7 @@ function addWindow() {
 function closeWindow(ch, alreadyClosed) {
   const i = charts.indexOf(ch);
   if (i <= 0) return;                                          // the main page stays
+  if (ch.trp) removeWindowTrade(ch.trp);
   charts.splice(i, 1); try { ch.ro.disconnect(); } catch (e) {}
   const k = scrubs.indexOf(ch.sc); if (k >= 0) scrubs.splice(k, 1);
   if (!alreadyClosed && !ch.win.closed) ch.win.close();
