@@ -1504,7 +1504,7 @@ function draw() {
     const k0 = Math.max(0, Math.min(count - 1, Math.floor(M.idx0))), k1 = Math.max(0, Math.min(count - 1, Math.floor(idx1)));
     const secs = Math.abs(bb.t0[k1] - bb.t0[k0]) / 1000, nBars = Math.abs(Math.floor(idx1) - Math.floor(M.idx0));
     const dur = secs >= 60 ? `${Math.floor(secs / 60)}m ${pad(Math.floor(secs % 60))}s` : `${secs.toFixed(secs < 10 ? 1 : 0)}s`;
-    const txt = `${tk > 0 ? '+' : ''}${tk} ticks  (${tk > 0 ? '+' : ''}${(tk * ts).toFixed(2)})  |  ${nBars} bars  |  ${dur}`;
+    const txt = `${tk > 0 ? '+' : ''}${tk} ticks  (${tk > 0 ? '+' : ''}${(tk * ts).toFixed(2)})  |  ${fmtUsd(tk * TICK_VALUE)}  |  ${nBars} bars  |  ${dur}`;
     ctx.save(); ctx.font = `bold 12px ${SANS}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     const tw = ctx.measureText(txt).width + 14, th = 20;
     const lx = Math.max(L.plotX + tw / 2, Math.min(L.plotX + L.plotW - tw / 2, (x0 + x1) / 2));
